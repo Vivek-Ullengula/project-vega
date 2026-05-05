@@ -41,7 +41,7 @@ async def query_knowledge_base(request: QueryRequest, user=Depends(get_current_u
                 top_k=request.top_k
             ):
                 # If follow_ups is empty, it's a status update
-                if not follow_ups and answer.startswith("🔍") or answer.startswith("📝"):
+                if not follow_ups and (answer.startswith("🔍") or answer.startswith("📝")):
                     yield f"data: {json.dumps({'type': 'status', 'message': answer})}\n\n"
                 else:
                     payload = {

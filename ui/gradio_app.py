@@ -106,9 +106,9 @@ def logout_user():
         "",
         [],                          # chatbot
         "",                          # session_state
-        gr.update(visible=False),    # fu1
-        gr.update(visible=False),    # fu2
-        gr.update(visible=False),    # fu3
+        gr.update(value="", visible=False),    # fu1
+        gr.update(value="", visible=False),    # fu2
+        gr.update(value="", visible=False),    # fu3
         gr.update(visible=True),     # suggestions
         ""                           # msg
     )
@@ -371,7 +371,7 @@ def build():
         )
 
         def clear_chat():
-            return [], "", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=True), ""
+            return [], "", gr.update(value="", visible=False), gr.update(value="", visible=False), gr.update(value="", visible=False), gr.update(visible=True), ""
             
         clear.click(
             clear_chat,

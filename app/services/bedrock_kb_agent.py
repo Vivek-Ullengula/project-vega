@@ -32,10 +32,12 @@ def _normalize_question(text: str) -> str:
 
 def _extract_followups_from_assistant_message(content: str) -> list[str]:
     """Extract historical follow-up questions from assistant responses."""
-    if not content or "**You might also want to ask:**" not in content:
+    if not content:
         return []
-    marker = "**You might also want to ask:**"
-    section = content.split(marker, 1)[1]
+    fu_pattern = r"(?i)\*{0,2}\s*You might also want to ask:?\s*\*{0,2}"
+    if not re.search(fu_pattern, content):
+        return []
+    section = re.split(fu_pattern, content, maxsplit=1)[1]
     matches = re.findall(r"\d+\.\s*(.+)", section)
     return [m.strip() for m in matches if m.strip()]
 
@@ -125,14 +127,22 @@ class BedrockKBAgent:
             response = agent(query)
             answer = str(response)
             
-            # Save assistant response
-            self.session_manager.add_message(session_id, "assistant", answer)
+            # Debug: inspect the response object to find where follow-ups live
+            logger.info("strands_response_debug",
+                        type=str(type(response)),
+                        str_len=len(answer),
+                        has_message=hasattr(response, 'message'),
+                        has_content=hasattr(response, 'content'),
+                        has_text=hasattr(response, 'text'),
+                        dir_keys=str([a for a in dir(response) if not a.startswith('_')]),
+                        last_200_chars=repr(answer[-200:]) if len(answer) > 200 else repr(answer))
             
-            # Extract and Split Follow-up Questions
+            # Extract and Split Follow-up Questions FIRST (before saving to session)
             follow_up_questions = []
-            fu_marker = "**You might also want to ask:**"
-            if fu_marker in answer:
-                parts = answer.split(fu_marker)
+            # Use flexible regex to catch formatting variations from the LLM
+            fu_pattern = r"(?i)\*{0,2}\s*You might also want to ask:?\s*\*{0,2}"
+            if re.search(fu_pattern, answer):
+                parts = re.split(fu_pattern, answer, maxsplit=1)
                 answer = parts[0].strip()
                 fu_text = parts[1]
                 matches = re.findall(r"\d+\.\s*(.+)", fu_text)
@@ -171,6 +181,9 @@ class BedrockKBAgent:
 
                 follow_up_questions = deduped_followups
 
+            # Save the cleaned answer (without follow-ups) to session history
+            self.session_manager.add_message(session_id, "assistant", answer)
+
             # Get source URLs — only include ones the LLM actually cited in the answer
             retrieval_sources = get_last_retrieval_sources()
             all_urls = [s["url"] for s in retrieval_sources if s.get("url") and s["url"] != "N/A"]
@@ -182,6 +195,10 @@ class BedrockKBAgent:
             sources = cited_urls if cited_urls else all_urls[:3]
 
             # Final yield
+            logger.info("follow_up_debug", 
+                        fu_count=len(follow_up_questions), 
+                        follow_ups=follow_up_questions,
+                        answer_ends_with=answer[-100:] if answer else "")
             yield answer, sources, follow_up_questions
             
         except Exception as e:
