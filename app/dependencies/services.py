@@ -1,21 +1,24 @@
-"""Service dependency injection — wires up the runtime orchestrator."""
+# app/dependencies/services.py
+"""Service dependency injection — provides singleton access to key services.
+
+Used primarily by the AgentCore entrypoint (entrypoints/agent_gateway.py)
+and any legacy code paths. The main FastAPI app uses lifespan-based DI instead.
+"""
+
 from functools import lru_cache
 
-from control_plane.agent_registry import AgentRegistry
-from agents.retrieval_agent import RetrievalAgent
-from runtime.orchestrator import RuntimeOrchestrator
+from adapters.aws.boto3_factory import Boto3SessionFactory
+from adapters.aws.dynamodb import DynamoDBAdapter
+from services.agent_service import AgentService
 from services.authorization import AuthorizationService
 from services.guardrails import GuardrailService
 from services.memory import AgentCoreMemoryProvider
+from services.model_gateway import BedrockModelGateway
+from services.tool_gateway import AgentCoreReadOnlyToolGateway
 from services.telemetry import CloudWatchTelemetryEmitter
 from services.audit import MetadataOnlyAuditLogger
-from services.session_manager import SessionManager
-from adapters.aws.boto3_factory import Boto3SessionFactory
-from adapters.aws.dynamodb_session import DynamoDBSessionRepository
-from domain.execution_profile import (
-    ExecutionProfile, ModelProfile, RetrievalProfile,
-    MemoryProfile, GuardrailProfile, ObservabilityProfile,
-)
+from runtime.orchestrator import RuntimeOrchestrator
+from runtime.response_composer import ResponseComposer
 from app.dependencies.settings import get_settings
 
 
@@ -25,100 +28,40 @@ def get_boto3_factory() -> Boto3SessionFactory:
 
 
 @lru_cache()
-def get_memory_provider() -> AgentCoreMemoryProvider:
-    """Create the AgentCore Memory provider using MemoryClient SDK."""
-    import boto3
+def get_dynamodb_adapter() -> DynamoDBAdapter:
     settings = get_settings()
-    session = boto3.Session(
-        aws_access_key_id=settings.aws_access_key_id,
-        aws_secret_access_key=settings.aws_secret_access_key,
-        region_name=settings.aws_region,
+    table = (
+        settings.dynamodb_table_name
+        if hasattr(settings, "dynamodb_table_name")
+        else "CoactionPlatform"
     )
-    return AgentCoreMemoryProvider(
-        boto3_session=session,
-        region_name=settings.aws_region,
-    )
+    return DynamoDBAdapter(table_name=table, region=settings.aws_region)
 
 
 @lru_cache()
-def get_session_manager() -> SessionManager:
-    """Create the session manager (in-memory fallback for local dev)."""
-    return SessionManager()
-
-
-@lru_cache()
-def get_agent_registry() -> AgentRegistry:
+def get_agent_service() -> AgentService:
     settings = get_settings()
-    registry = AgentRegistry()
-
-    # ── Coaction Binding Authority Bot ──────────────────────────────
-    binding_authority_bot = RetrievalAgent(
-        agent_id="coaction_binding_authority_bot",
-        prompt_template_id="coaction_binding_authority_bot",
-    )
-
-    binding_authority_profile = ExecutionProfile(
-        agent_id="coaction_binding_authority_bot",
-        version="v1",
-        prompt_template_id="coaction_binding_authority_bot",
-        model_profile=ModelProfile(
-            provider="bedrock" if settings.model_provider.lower() == "bedrock" else "bedrock",
-            model_id=(
-                settings.bedrock_model_id
-                if settings.model_provider.lower() == "bedrock"
-                else settings.openai_chat_model
-            ),
-        ),
-        retrieval_profile=RetrievalProfile(
-            knowledge_base_ids=[settings.bedrock_kb_id] if settings.bedrock_kb_id else [],
-        ),
-        memory_profile=MemoryProfile(
-            enabled=settings.agentcore_memory_enabled,
-            memory_id=settings.agentcore_memory_id,
-        ),
-        guardrail_profile=GuardrailProfile(
-            guardrail_id=settings.guardrail_id,
-            guardrail_version=settings.guardrail_version,
-        ),
-        observability_profile=ObservabilityProfile(),
-    )
-
-    registry.register(binding_authority_bot, binding_authority_profile)
-
-    # ── Future agents go here ──────────────────────────────────────
-    # Example: Adding a new agent is just:
-    #
-    # claims_bot = RetrievalAgent(
-    #     agent_id="claims_assistant_bot",
-    #     prompt_template_id="claims_assistant",
-    # )
-    # claims_profile = ExecutionProfile(
-    #     agent_id="claims_assistant_bot",
-    #     version="v1",
-    #     prompt_template_id="claims_assistant",
-    #     model_profile=ModelProfile(model_id="..."),
-    #     retrieval_profile=RetrievalProfile(knowledge_base_ids=["DIFFERENT_KB"]),
-    #     memory_profile=MemoryProfile(memory_id="mem-different-id"),
-    #     guardrail_profile=GuardrailProfile(),
-    # )
-    # registry.register(claims_bot, claims_profile)
-
-    return registry
-
-
-@lru_cache()
-def get_session_repo() -> DynamoDBSessionRepository:
-    return DynamoDBSessionRepository(get_boto3_factory())
+    dynamodb = get_dynamodb_adapter()
+    return AgentService(dynamodb=dynamodb, region=settings.aws_region)
 
 
 @lru_cache()
 def get_orchestrator() -> RuntimeOrchestrator:
+    """Build a RuntimeOrchestrator for use by the AgentCore entrypoint."""
+    factory = get_boto3_factory()
+    dynamodb = get_dynamodb_adapter()
+
+    from control_plane.execution_profile_repository import ExecutionProfileRepository
+    
     return RuntimeOrchestrator(
-        agent_registry=get_agent_registry(),
+        profile_repo=ExecutionProfileRepository(dynamodb_adapter=dynamodb, config_dir="profiles"),
         authorization=AuthorizationService(),
-        guardrails=GuardrailService(),
-        memory=get_memory_provider(),
-        telemetry=CloudWatchTelemetryEmitter(get_boto3_factory()),
+        guardrails=GuardrailService(boto3_factory=factory),
+        retriever=None,
+        memory=AgentCoreMemoryProvider(dynamodb_adapter=dynamodb, boto3_factory=factory),
+        model_gateway=BedrockModelGateway(region=get_settings().aws_region),
+        tool_gateway=AgentCoreReadOnlyToolGateway(boto3_factory=factory),
+        response_composer=ResponseComposer(),
+        telemetry=CloudWatchTelemetryEmitter(boto3_factory=factory),
         audit=MetadataOnlyAuditLogger(),
-        session_repo=get_session_repo(),
     )

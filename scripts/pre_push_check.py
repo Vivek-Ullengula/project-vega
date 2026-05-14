@@ -19,7 +19,9 @@ def run_command(cmd: List[str], description: str, can_fail: bool = False) -> boo
     print(f"\n[Running] {description}...")
     print(f"  Command: {' '.join(cmd)}")
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
         if result.returncode == 0:
             print(f"  [SUCCESS] {description} passed cleanly.")
             return True
@@ -33,7 +35,7 @@ def run_command(cmd: List[str], description: str, can_fail: bool = False) -> boo
     except FileNotFoundError:
         executable = cmd[0]
         print(f"  [ERROR] Executable '{executable}' not found in PATH.")
-        print(f"          Please ensure dependencies are installed (e.g. pip install ruff pytest).")
+        print("          Please ensure dependencies are installed (e.g. pip install ruff pytest).")
         return False
     except Exception as e:
         print(f"  [ERROR] Unhandled subprocess exception: {e}")
@@ -57,12 +59,32 @@ def main() -> None:
 
     if args.fix:
         print("\nMode: AUTO-FIX enabled. Modifying files in-place to adhere to standard layouts.")
-        steps.append((["ruff", "check", "--fix", "."], "Ruff Auto-Fix Linter"))
-        steps.append((["ruff", "format", "."], "Ruff Code Formatter"))
+        steps.append(
+            (
+                [sys.executable, "-m", "ruff", "check", "--fix", "--exclude", "vega_ref", "."],
+                "Ruff Auto-Fix Linter",
+            )
+        )
+        steps.append(
+            (
+                [sys.executable, "-m", "ruff", "format", "--exclude", "vega_ref", "."],
+                "Ruff Code Formatter",
+            )
+        )
     else:
         print("\nMode: CHECK-ONLY. Verifying code files without modifying content.")
-        steps.append((["ruff", "check", "."], "Ruff Linter Check"))
-        steps.append((["ruff", "format", "--check", "."], "Ruff Format Conformance Check"))
+        steps.append(
+            (
+                [sys.executable, "-m", "ruff", "check", "--exclude", "vega_ref", "."],
+                "Ruff Linter Check",
+            )
+        )
+        steps.append(
+            (
+                [sys.executable, "-m", "ruff", "format", "--check", "--exclude", "vega_ref", "."],
+                "Ruff Format Conformance Check",
+            )
+        )
 
     # Always append the pytest regression framework suite
     steps.append(([sys.executable, "-m", "pytest"], "Pytest Unit Regression Suite"))

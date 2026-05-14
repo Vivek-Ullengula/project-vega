@@ -22,8 +22,14 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "bedrock_ingest
 
 # ── Files to delete ──
 JUNK_FILES = [
-    os.path.join(DATA_DIR, "property_sections", "source_url_httpsbindingauthoritycoactionspecialtyc.md"),
-    os.path.join(DATA_DIR, "property_sections", "source_url_httpsbindingauthoritycoactionspecialtycommanualspropertyhtml.md"),
+    os.path.join(
+        DATA_DIR, "property_sections", "source_url_httpsbindingauthoritycoactionspecialtyc.md"
+    ),
+    os.path.join(
+        DATA_DIR,
+        "property_sections",
+        "source_url_httpsbindingauthoritycoactionspecialtycommanualspropertyhtml.md",
+    ),
 ]
 
 
@@ -44,7 +50,7 @@ def fix_bullet_formatting(filepath: str) -> tuple[str, bool]:
     """Convert 'oSomething' at start of line to '- Something'."""
     with open(filepath, "r", encoding="utf-8") as fh:
         content = fh.read()
-    
+
     # Match lines starting with 'o' followed by an uppercase letter (bullet items)
     fixed = re.sub(r"^o([A-Z])", r"- \1", content, flags=re.MULTILINE)
     changed = fixed != content
@@ -54,9 +60,9 @@ def fix_bullet_formatting(filepath: str) -> tuple[str, bool]:
 def main():
     dry_run = "--apply" not in sys.argv
     mode = "DRY RUN" if dry_run else "APPLYING"
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  Coaction Data Cleanup — {mode}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     # ── Step 1: Delete underscore duplicates ──
     prop_dir = os.path.join(DATA_DIR, "property_sections")
@@ -66,9 +72,9 @@ def main():
         print(f"    [x] {os.path.basename(d)}")
         if not dry_run:
             os.remove(d)
-    
+
     # ── Step 2: Delete junk files ──
-    print(f"\n[2] Junk table-of-contents files to delete:")
+    print("\n[2] Junk table-of-contents files to delete:")
     for jf in JUNK_FILES:
         if os.path.exists(jf):
             print(f"    [x] {os.path.basename(jf)}")
@@ -78,7 +84,7 @@ def main():
             print(f"    (already gone) {os.path.basename(jf)}")
 
     # ── Step 3: Fix bullet formatting ──
-    print(f"\n[3] Fixing bullet formatting (oXxx -> - Xxx):")
+    print("\n[3] Fixing bullet formatting (oXxx -> - Xxx):")
     fixed_count = 0
     for folder in ["full_manuals", "guide_sections", "property_sections"]:
         folder_path = os.path.join(DATA_DIR, folder)
@@ -95,11 +101,11 @@ def main():
                 if not dry_run:
                     with open(filepath, "w", encoding="utf-8") as fh:
                         fh.write(fixed_content)
-    
+
     print(f"    -> {fixed_count} file(s) with bullet fixes")
 
     # ── Summary ──
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     if dry_run:
         print("  DRY RUN complete. Run with --apply to make changes.")
         print(f"  python {sys.argv[0]} --apply")
@@ -109,7 +115,7 @@ def main():
         print("  Next steps:")
         print("    1. Sync data/ to your S3 bucket")
         print("    2. Re-ingest the data source in Bedrock console")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":

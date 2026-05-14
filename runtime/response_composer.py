@@ -1,30 +1,56 @@
-from typing import List, Dict, Any
-from domain.execution_profile import ExecutionProfile
+# coaction_agent_platform/runtime/response_composer.py
+"""Response composition per HLD Section 8.
+
+Composes the final AgentInvocationResponse from model results,
+retrieved context, memory context, and tool results.
+"""
+
+import structlog
+from domain.models import (
+    AgentInvocationRequest,
+    AgentInvocationResponse,
+    ExecutionProfile,
+    SourceCitation,
+    ToolResult,
+)
+
+logger = structlog.get_logger(__name__)
+
 
 class ResponseComposer:
-    """
-    Composes the final response payload for the agent invocation.
-    Ensures consistent structure and applies any profile-specific formatting.
-    """
-    def compose(
-        self, 
-        agent_id: str,
-        answer: str, 
-        session_id: str,
-        citations: List[Dict[str, Any]] = None,
-        tool_results: List[Dict[str, Any]] = None,
-        model_id: str = None
-    ) -> Dict[str, Any]:
-        response = {
-            "status": "success",
-            "answer": answer,
-            "session_id": session_id,
-            "agent_id": agent_id,
-            "citations": citations or [],
-            "tool_results": tool_results or [],
-            "model_id": model_id,
-            "metadata": {
-                "version": "v1"
-            }
+    """Assembles the final response from the orchestration pipeline outputs."""
+
+    async def compose(
+        self,
+        request: AgentInvocationRequest,
+        profile: ExecutionProfile,
+        model_result: dict,
+        retrieved_context: list[SourceCitation] | None = None,
+        memory_context: dict | None = None,
+        tool_results: list[ToolResult] | None = None,
+        session_id: str = "",
+        correlation_id: str = "",
+    ) -> AgentInvocationResponse:
+        """Compose the final response envelope."""
+        answer = model_result.get("answer", "")
+        status = model_result.get("status", "success")
+
+        citations = retrieved_context or []
+        tools = tool_results or []
+
+        metadata = {
+            k: v
+            for k, v in model_result.items()
+            if k not in ("answer", "status", "citations", "agent_messages")
         }
-        return response
+
+        return AgentInvocationResponse(
+            status=status,
+            answer=answer,
+            citations=citations,
+            tool_results=tools,
+            session_id=session_id,
+            correlation_id=correlation_id,
+            model_id=profile.model_profile.model_id,
+            metadata=metadata,
+        )

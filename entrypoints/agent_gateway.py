@@ -1,15 +1,15 @@
 """
 Native AgentCore Runtime entrypoint loop.
-Acts as a lean event listener that receives cloud invocation payloads and 
+Acts as a lean event listener that receives cloud invocation payloads and
 delegates execution directly to the shared RuntimeOrchestrator pipeline.
 Maintains zero standalone orchestration, middleware, or auth logic.
 """
+
 import os
 import sys
 import uuid
 import asyncio
 import logging
-from typing import Dict, Any
 
 from dotenv import load_dotenv
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -17,8 +17,7 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from domain.invocation import AgentInvocationRequest
-from domain.identity import IdentityContext
+from domain.models import AgentInvocationRequest, IdentityContext
 from app.dependencies.services import get_orchestrator
 
 logging.basicConfig(level=logging.INFO)
@@ -60,30 +59,32 @@ def invoke(payload: dict) -> dict:
 
     try:
         orchestrator = get_orchestrator()
-        
+
         # Execute shared orchestration pipeline asynchronously
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
+
         response = loop.run_until_complete(orchestrator.execute(request, identity))
-        
+
         # Convert Pydantic response model to standard dict serializable payload
         return response.model_dump()
-        
+
     except Exception as e:
         logger.exception("AgentCore SDK entrypoint unhandled orchestration crash")
         return {
             "status": "error",
             "answer": f"Internal Gateway Error: {str(e)}",
             "session_id": session_id,
-            "agent_id": AGENT_ID
+            "agent_id": AGENT_ID,
         }
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    logger.info(f"Starting specialized AgentCore SDK listener loop for agent: {AGENT_ID} on port {port}")
+    logger.info(
+        f"Starting specialized AgentCore SDK listener loop for agent: {AGENT_ID} on port {port}"
+    )
     app.run(port=port)

@@ -1,73 +1,52 @@
-"""Agent registry — manages registered agents and their execution profiles."""
-import os
-import json
-from typing import Optional
-from runtime.base_agent import BaseAgent
-from domain.execution_profile import ExecutionProfile
+# coaction_agent_platform/control_plane/agent_registry.py
+"""Agent registry per HLD Section 5.
+
+Tracks registered agents, their active versions, and configuration state.
+"""
+
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 
-class AgentRegistry:
-    """In-memory registry of agents and their execution profiles."""
+class AgentRegistryEntry:
+    """An entry in the agent registry."""
 
-    def __init__(self):
-        self._agents: dict[str, BaseAgent] = {}
-        self._profiles: dict[str, ExecutionProfile] = {}
+    def __init__(self, agent_id: str, active_version: str, status: str = "active"):
+        self.agent_id = agent_id
+        self.active_version = active_version
+        self.status = status
 
-    def _auto_load(self, agent_id: str) -> bool:
-        """Attempt to load agent configuration dynamically from profiles directory."""
-        path = os.path.join("profiles", f"{agent_id}.json")
-        if not os.path.exists(path):
-            return False
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            
-            # Map top-level nested structures dynamically if present
-            profile = ExecutionProfile(**data)
-            
-            # Create a generic RetrievalAgent implementation for standard execution profiles
-            from agents.retrieval_agent import RetrievalAgent
-            agent = RetrievalAgent(
-                agent_id=agent_id,
-                prompt_template_id=profile.prompt_template_id or agent_id,
-            )
-            self.register(agent, profile)
-            return True
-        except Exception:
-            return False
 
-    def register(self, agent: BaseAgent, profile: ExecutionProfile) -> None:
-        """Register an agent with its execution profile."""
-        self._agents[agent.agent_id] = agent
-        self._profiles[agent.agent_id] = profile
+class AgentRegistryRepository:
+    """Registry of deployed agents.
 
-    def get_agent(self, agent_id: str) -> BaseAgent:
-        if agent_id not in self._agents:
-            if not self._auto_load(agent_id):
-                raise ValueError(f"Agent not found: {agent_id}")
-        return self._agents[agent_id]
+    In the first release, the registry is backed by DynamoDB.
+    Each agent has an active version that maps to an ExecutionProfile.
+    """
 
-    def get_profile(self, agent_id: str) -> ExecutionProfile:
-        if agent_id not in self._profiles:
-            if not self._auto_load(agent_id):
-                raise ValueError(f"Profile not found: {agent_id}")
-        return self._profiles[agent_id]
+    def __init__(self, dynamodb_adapter=None):
+        self.dynamodb = dynamodb_adapter
+        self._registry: dict[str, AgentRegistryEntry] = {}
 
-    def list_agents(self) -> list[dict]:
-        # Pre-scan profiles folder to reflect fully discovered JSON files
-        if os.path.exists("profiles"):
-            for fname in os.listdir("profiles"):
-                if fname.endswith(".json"):
-                    aid = fname[:-5]
-                    if aid not in self._agents:
-                        self._auto_load(aid)
+    def register(self, agent_id: str, version: str) -> None:
+        """Register or update an agent in the registry."""
+        self._registry[agent_id] = AgentRegistryEntry(
+            agent_id=agent_id,
+            active_version=version,
+        )
+        logger.info("agent_registered", agent_id=agent_id, version=version)
 
-        return [
-            {
-                "agent_id": aid,
-                "agent_type": a.agent_type(),
-                "version": self._profiles[aid].version,
-                "memory_enabled": self._profiles[aid].memory_profile.enabled,
-            }
-            for aid, a in self._agents.items()
-        ]
+    async def get_active_agent(self, agent_id: str) -> AgentRegistryEntry:
+        """Get the active agent entry."""
+        if agent_id in self._registry:
+            return self._registry[agent_id]
+
+        # Default: assume version "latest"
+        entry = AgentRegistryEntry(agent_id=agent_id, active_version="latest")
+        self._registry[agent_id] = entry
+        return entry
+
+    def list_agents(self) -> list[AgentRegistryEntry]:
+        """List all registered agents."""
+        return list(self._registry.values())

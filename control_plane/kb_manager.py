@@ -1,12 +1,12 @@
 import boto3
-import time
 import logging
 
 logger = logging.getLogger(__name__)
 
+
 class KBManager:
     """Automates creation and management of Bedrock Knowledge Bases."""
-    
+
     def __init__(self, region_name="us-east-1"):
         self.client = boto3.client("bedrock-agent", region_name=region_name)
 
@@ -42,11 +42,9 @@ class KBManager:
                 roleArn=role_arn,
                 knowledgeBaseConfiguration={
                     "type": "VECTOR",
-                    "vectorKnowledgeBaseConfiguration": {
-                        "embeddingModelArn": embedding_model_arn
-                    }
+                    "vectorKnowledgeBaseConfiguration": {"embeddingModelArn": embedding_model_arn},
                 },
-                storageConfiguration=storage_config
+                storageConfiguration=storage_config,
             )
             kb_id = response["knowledgeBase"]["knowledgeBaseId"]
             logger.info(f"KB created with ID: {kb_id}")
@@ -64,10 +62,8 @@ class KBManager:
                 name=name,
                 dataSourceConfiguration={
                     "type": "S3",
-                    "s3Configuration": {
-                        "bucketArn": bucket_arn
-                    }
-                }
+                    "s3Configuration": {"bucketArn": bucket_arn},
+                },
             )
             ds_id = response["dataSource"]["dataSourceId"]
             logger.info(f"Data Source created with ID: {ds_id}")
@@ -80,10 +76,7 @@ class KBManager:
         """Starts an ingestion job."""
         try:
             logger.info(f"Starting ingestion for KB: {kb_id}, DS: {ds_id}")
-            response = self.client.start_ingestion_job(
-                knowledgeBaseId=kb_id,
-                dataSourceId=ds_id
-            )
+            response = self.client.start_ingestion_job(knowledgeBaseId=kb_id, dataSourceId=ds_id)
             job_id = response["ingestionJob"]["ingestionJobId"]
             logger.info(f"Ingestion job started: {job_id}")
             return job_id

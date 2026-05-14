@@ -1,169 +1,138 @@
-"""
-Runtime orchestrator — the standard execution pipeline.
-Ties together authorization, guardrails, memory, agent invocation,
-telemetry, and audit into a single flow.
+# coaction_agent_platform/runtime/orchestrator.py
+"""Runtime orchestrator per HLD Section 8.
 
-Each agent's behavior is driven by its ExecutionProfile:
-  - memory_profile → controls AgentCore Memory read/write
-  - retrieval_profile → controls KB retrieval
-  - guardrail_profile → controls input/output guardrails
-  - model_profile → controls LLM selection
+Enforces the standard execution sequence for every agent invocation:
+authorize → guardrails input → memory read → retrieval → model → tools →
+compose response → guardrails output → memory write → telemetry → audit.
 """
+
 import uuid
-import logging
-from datetime import datetime, timezone
+import structlog
 
-from domain.invocation import AgentInvocationRequest, AgentInvocationResponse, SourceCitation
-from domain.identity import IdentityContext
-from domain.execution_profile import ExecutionProfile
-from control_plane.agent_registry import AgentRegistry
+from domain.models import (
+    AgentInvocationRequest,
+    AgentInvocationResponse,
+    IdentityContext,
+)
+from runtime.response_composer import ResponseComposer
 from services.authorization import AuthorizationService
 from services.guardrails import GuardrailService
-from services.memory import AgentCoreMemoryProvider
 from services.telemetry import CloudWatchTelemetryEmitter
 from services.audit import MetadataOnlyAuditLogger
-from adapters.aws.dynamodb_session import DynamoDBSessionRepository
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class RuntimeOrchestrator:
-    """Executes the standard agent invocation pipeline."""
+    """Standard runtime orchestrator — enforces the execution pipeline for all agents.
+
+    Per HLD Section 8, this is the central execution pipeline that every agent
+    invocation flows through, regardless of agent type.
+    """
 
     def __init__(
         self,
-        agent_registry: AgentRegistry,
+        profile_repo,
         authorization: AuthorizationService,
         guardrails: GuardrailService,
-        memory: AgentCoreMemoryProvider,
+        retriever,
+        memory,
+        model_gateway,
+        tool_gateway,
+        response_composer: ResponseComposer,
         telemetry: CloudWatchTelemetryEmitter,
         audit: MetadataOnlyAuditLogger,
-        session_repo: DynamoDBSessionRepository | None = None,
-    ):
-        self.registry = agent_registry
+    ) -> None:
+        self.profile_repo = profile_repo
         self.authorization = authorization
         self.guardrails = guardrails
+        self.retriever = retriever
         self.memory = memory
+        self.model_gateway = model_gateway
+        self.tool_gateway = tool_gateway
+        self.response_composer = response_composer
         self.telemetry = telemetry
         self.audit = audit
-        self.session_repo = session_repo
-
-    def _build_memory_context_prompt(self, memory_context: dict) -> str:
-        """
-        Build a context string from retrieved memory to inject into the agent.
-        Combines long-term memory records with any relevant session history.
-        """
-        parts = []
-
-        # Long-term memory: user preferences, past insights
-        long_term = memory_context.get("long_term_context", [])
-        if long_term:
-            parts.append("=== Relevant context from past conversations ===")
-            for record in long_term[:5]:  # Limit to top 5
-                content = record.get("content", "")
-                if content:
-                    parts.append(f"- {content}")
-            parts.append("")
-
-        return "\n".join(parts)
 
     async def execute(
         self,
         request: AgentInvocationRequest,
         identity: IdentityContext,
     ) -> AgentInvocationResponse:
-        """Execute the full invocation pipeline."""
-        correlation_id = identity.correlation_id or str(uuid.uuid4())
+        """Execute the standard orchestration pipeline."""
         session_id = request.session_id or str(uuid.uuid4())
-        # Ensure session_id is set on the request for downstream use
-        request.session_id = session_id
+        correlation_id = identity.correlation_id
+
+        logger.info(
+            "orchestrator_execute_start",
+            agent_id=request.agent_id,
+            session_id=session_id,
+            user_id=identity.user_id,
+        )
 
         try:
-            # 1. Resolve agent + profile
-            agent = self.registry.get_agent(request.agent_id)
-            profile = self.registry.get_profile(request.agent_id)
+            # 1. Load execution profile
+            profile = await self.profile_repo.get_profile(request.agent_id)
 
-            # 2. Authorize
-            await self.authorization.authorize(
-                user_id=identity.user_id, roles=identity.roles, agent_id=request.agent_id,
-            )
+            # 2. Authorization check
+            await self.authorization.authorize_invocation(identity, profile)
 
             # 3. Input guardrails
-            await self.guardrails.check_input(request.input_text)
+            await self.guardrails.check_input(request, profile)
 
-            # 4. Read memory (profile controls what gets read)
-            memory_context = await self.memory.read(
+            # 4. Read memory context
+            memory_context = await self.memory.read(request, identity, profile)
+
+            # 5. Retrieval (delegated to the agent's tools via Strands)
+            # The retriever runs inside the Strands agent as a tool call.
+            # We pass memory context for conversation history.
+
+            # 6. Model invocation (via Strands agent)
+            model_result = await self.model_gateway.invoke(
                 request=request,
+                identity=identity,
+                profile=profile,
+                memory_context=memory_context,
+            )
+
+            # 7. Tool results (extracted from model_result if any)
+            tool_results = await self.tool_gateway.execute_readonly_tools(
+                model_result=model_result,
                 identity=identity,
                 profile=profile,
             )
 
-            # Build memory context string for the agent
-            memory_prompt = self._build_memory_context_prompt(memory_context)
-
-            # 5. Invoke agent
-            role = identity.roles[0] if identity.roles else "underwriter"
-            result = await agent.invoke(
-                query=request.input_text,
-                session_id=session_id,
-                role=role,
-                user_id=identity.user_id,
-                memory_context=memory_prompt,
-            )
-
-            # 6. Output guardrails
-            await self.guardrails.check_output(result["answer"])
-
-            # 7. Build response
-            citations = [
-                SourceCitation(source_id=url, uri=url) for url in result.get("sources", [])
-            ]
-            response = AgentInvocationResponse(
-                status="success",
-                answer=result["answer"],
-                citations=citations,
-                follow_up_questions=result.get("follow_up_questions", []),
+            # 8. Compose response
+            response = await self.response_composer.compose(
+                request=request,
+                profile=profile,
+                model_result=model_result,
+                retrieved_context=model_result.get("citations"),
+                memory_context=memory_context,
+                tool_results=tool_results,
                 session_id=session_id,
                 correlation_id=correlation_id,
-                model_id=result.get("model_id"),
             )
 
-            # 8. Write memory (profile controls what gets written)
-            await self.memory.write(
-                request=request,
-                response=response,
-                identity=identity,
-                profile=profile,
-            )
+            # 9. Output guardrails
+            await self.guardrails.check_output(response, profile)
 
-            # Stateless Session state recovery snapshotting
-            if self.session_repo:
-                now_iso = datetime.now(timezone.utc).isoformat()
-                await self.session_repo.save(
-                    session_id=request.session_id,
-                    agent_id=request.agent_id,
-                    user_id=identity.user_id,
-                    state={"last_invocation": now_iso, "correlation_id": identity.correlation_id},
-                )
+            # 10. Write memory
+            await self.memory.write(request, response, identity, profile)
 
-            # 9. Telemetry & audit
-            await self.telemetry.emit(
-                agent_id=request.agent_id, status="success",
-                model_id=result.get("model_id"), correlation_id=correlation_id,
-                citation_count=len(citations),
-            )
-            await self.audit.record(
-                correlation_id=correlation_id, agent_id=request.agent_id,
-                version=profile.version, user_id=identity.user_id,
-                channel=identity.channel, status="success",
-                model_id=result.get("model_id"), citation_count=len(citations),
-            )
+            # 11. Telemetry
+            await self.telemetry.emit_invocation(request, response, profile)
+
+            # 12. Audit
+            await self.audit.record_invocation(request, response, identity, profile)
 
             return response
 
         except Exception as e:
-            logger.error("orchestrator_execute_failed", extra={"error": str(e), "agent_id": request.agent_id})
+            logger.error("orchestrator_execute_failed", error=str(e))
             return AgentInvocationResponse(
-                status="error", answer=f"Error: {str(e)}",
-                session_id=session_id, correlation_id=correlation_id,
+                status="error",
+                answer=f"An error occurred: {str(e)}",
+                session_id=session_id,
+                correlation_id=correlation_id,
             )

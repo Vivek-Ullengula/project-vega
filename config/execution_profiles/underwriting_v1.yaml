@@ -1,0 +1,40 @@
+# Execution Profile: Coaction Underwriting Agent v1
+# This is loaded into DynamoDB on first deploy.
+
+agent_id: "coaction-underwriting"
+version: "1.0"
+orchestration_framework: "strands"
+prompt_template_id: "underwriting_system_v1"
+
+model_profile:
+  provider: "bedrock"
+  model_id: "anthropic.claude-sonnet-4-20250514"
+  temperature: 0.0
+  max_tokens: 4096
+
+retrieval_profile:
+  provider: "bedrock_knowledge_base"
+  enabled: true
+  knowledge_base_ids: []  # Populated dynamically from KB management
+  reranking_enabled: true
+  citations_required: true
+
+memory_profile:
+  provider: "agentcore_memory"
+  enabled: true
+  persistent: true
+  memory_scope: "agent_user"
+  retention_days: 90
+
+guardrail_profile:
+  input_check_enabled: true
+  output_check_enabled: true
+
+observability_profile:
+  provider: "cloudwatch"
+  emit_metrics: true
+  emit_traces: true
+  log_raw_prompt: false
+  log_raw_response: false
+
+response_contract_version: "v1"

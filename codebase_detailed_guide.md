@@ -1,154 +1,244 @@
-# Project Vega: Comprehensive Codebase & Flow Manual
+# Project Vega — Codebase Detailed Guide
 
-This document serves as the authoritative, module-by-module architectural reference mapping out the exact file responsibilities, runtime data pipelines, local developer environments, and dual-target deployment mechanics of the **Coaction Multi-Agent Core Platform**.
+This guide explains every module in the codebase, how they connect, and the data flow for agent invocations. Use this as a reference when modifying or extending the platform.
 
 ---
 
-## 🧭 1. High-Level Ingress Matrix: What File Does What
+## Directory Structure
 
-The architecture leverages a hybrid runtime envelope to maximize code reuse while serving highly divergent caller classes.
-
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                        EXTERNAL API CONSUMERS                          │
-│        (REST UI Client / Enterprise ESB Portals / API Gateway)         │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ HTTP / REST Protocols
-┌───────────────────────────────────▼────────────────────────────────────┐
-│                        FASTAPI INGRESS SHELL                           │
-│                                                                        │
-│   ├── app/main.py               (Uvicorn HTTP Lifecycle / Lifespan)    │
-│   ├── app/dependencies/identity.py  (Header Extractor & Scope Maps)    │
-│   ├── app/routers/invoke.py     (POST /v1/agents/{id}/invoke Map)      │
-│   └── app/routers/threads.py    (UI Application Thread Metadata APIs)  │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ Shared Execution Call
-┌───────────────────────────────────▼────────────────────────────────────┐
-│                      UNIVERSAL ORCHESTRATION PLANE                     │
-│                                                                        │
-│   ├── runtime/orchestrator.py   (Master 15-Step Logic Pipeline)        │
-│   ├── control_plane/registry.py (Dynamic Profile Auto-Loader)          │
-│   ├── services/retrieval.py     (Strands Knowledge Base Driver)        │
-│   ├── services/memory.py        (AgentCore Short/Long-Term LTM)        │
-│   └── adapters/aws/dynamodb_session.py (Stateless Compute Snapshotter) │
-└───────────────────────────────────▲────────────────────────────────────┘
-                                    │ Direct Context Invoke
-┌───────────────────────────────────┴────────────────────────────────────┐
-│                 AWS INTERNAL MICROVM CLOUD TRIGGERS                    │
-│      (Step Functions / EventBridge / Direct Runtime SDK Invokes)       │
-└───────────────────────────────────▲────────────────────────────────────┘
-                                    │ Cloud Invocations
-┌───────────────────────────────────┴────────────────────────────────────┐
-│                   AGENTCORE LEAN LISTENER TARGET                       │
-│                                                                        │
-│   └── entrypoints/agent_gateway.py  (Pure BedrockAgentCoreApp SDK Wrapper)│
-└────────────────────────────────────────────────────────────────────────┘
+```
+project-vega/
+├── adapters/aws/        # AWS service wrappers
+├── agents/              # Agent logic, prompts, tools
+├── app/                 # FastAPI application layer
+├── control_plane/       # Agent registry & deployment
+├── domain/              # Pydantic domain models
+├── entrypoints/         # AgentCore MicroVM listener
+├── runtime/             # Orchestration pipeline
+├── services/            # Business logic services
+├── ui/                  # Gradio web interface
+├── scripts/             # CLI tools & automation
+├── profiles/            # JSON execution profiles
+├── config/              # YAML execution profiles
+├── tests/               # Unit tests
+└── .github/workflows/   # CI/CD pipeline
 ```
 
 ---
 
-## 📂 2. File-by-File Directory Reference
+## Layer-by-Layer Breakdown
 
-### `app/` — The External REST Framework Interface
-* **`app/main.py`**: Initializes the primary FastAPI server application. Configures CORS rules, instantiates standard middleware layers, verifies local Database schemas on application lifespan triggers, and auto-loads agent profile inventories.
-* **`app/dependencies/settings.py`**: Validates base string configs (`MODEL_PROVIDER`, local paths, regional constraints) via `pydantic_settings`. Reads fallback values directly from cached local `.env` structures.
-* **`app/dependencies/identity.py`**: Decodes runtime context identifiers (`X-User-Id`, `X-Roles`, `X-Correlation-Id`) coming out of verified incoming request headers.
-* **`app/dependencies/services.py`**: The central **Dependency Injection (DI)** factory mapping module. Natively binds singleton instance caches (`lru_cache`) for all high-level runtime services, preventing independent unmanaged service worker threads.
-* **`app/routers/invoke.py`**: Maps standard multi-turn conversation payloads to target agents. Translates JSON input texts and optional Postman override tags into typed invocation schemas.
-* **`app/routers/threads.py`**: Powers specific client UI interfaces. Interrogates the dedicated `agent_threads` DynamoDB GSI table for thread listings, delegates direct full-text chat file deserialization calls to backend S3 adapters, and handles hard cascade row removals.
-* **`app/routers/sessions.py`**: Provides diagnostic REST read endpoints targeting active in-memory session mapping blocks.
+### 1. `domain/models.py` — Unified Domain Models
 
-### `domain/` — Authoritative Type Safety Contracts
-* Contains strictly defined **Pydantic** models mapping structural inputs and outputs: `AgentInvocationRequest`, `IdentityContext`, `SourceCitation`, and `AgentInvocationResponse`. Enforces rigorous payload boundaries to guarantee zero unhandled serialization layer exceptions.
+Single file containing ALL Pydantic models used across the platform:
 
-### `runtime/` — The Core Multi-Agent Logic Platform
-* **`runtime/orchestrator.py`**: The definitive computational engine driving every single agent call across both runtime targets. Implements the strict, sequential **15-Step Request Pipeline** directly.
-* **`runtime/strands_agent.py`**: Wraps external `strands.Agent` framework integrations. Manages dynamic instantiation of secure first-party Amazon model classes (`BedrockModel`) using AWS IAM identity credentials natively.
-* **`runtime/response_composer.py`**: Formats valid framework outputs, extracted tool payloads, and generation timestamps into fully structured response JSON representations.
+| Model | Purpose |
+|-------|---------|
+| `AgentInvocationRequest` | Input from client (agent_id, input_text, session_id) |
+| `AgentInvocationResponse` | Output with status, answer, citations, tool_results, metadata |
+| `IdentityContext` | User identity (user_id, roles, channel, correlation_id, JWT claims) |
+| `SourceCitation` | Reference to a source document (source_id, title, uri, manual_name) |
+| `ToolResult` | Result from a tool call (tool_id, status, result_summary) |
+| `ExecutionProfile` | Complete agent configuration (model, retrieval, memory, guardrails) |
+| `ModelProfile` | Bedrock model settings (model_id, temperature, max_tokens) |
+| `RetrievalProfile` | KB retrieval config (knowledge_base_ids, reranking, citations) |
+| `MemoryProfile` | Session memory config (scope, retention_days, read/write flags) |
+| `ToolPermission` | Per-tool role-based access control |
+| `GuardrailProfile` | Bedrock Guardrails config (guardrail_id, input/output checks) |
+| `ObservabilityProfile` | CloudWatch telemetry config |
 
-### `control_plane/` — Dynamic Configuration Auto-Loaders
-* **`control_plane/agent_registry.py`**: Maps and returns operational runtime profiles (`ExecutionProfile`). Enables highly complex parameter definitions (e.g., specific target model string fallbacks, KB list scopes, long-term memory constraints) per agent entity.
-* **`control_plane/prompt_repository.py`**: The centralized system prompt instructions repository. Maps specialized role-driven behavioral contexts dynamically based on active agent lookup keys.
+### 2. `adapters/aws/` — AWS Service Wrappers
 
-### `services/` — Decoupled External Resource Drivers
-* **`services/retrieval.py`**: Interrogates dedicated Amazon Bedrock Knowledge Bases using optimized embedded vectors to resolve runtime source citations.
-* **`services/memory.py`**: Coordinates long-term and short-term semantic memory logic via high-performance AgentCore session adapters.
-* **`services/telemetry.py` & `services/audit.py`**: Emits operational trace speed statistics and metadata records directly to structured CloudWatch log stream outputs while strictly preventing raw prompt persistence.
+| File | Class | What It Does |
+|------|-------|-------------|
+| `boto3_factory.py` | `Boto3SessionFactory` | Centralized AWS client creation with region config |
+| `cognito.py` | `CognitoAdapter` | Cognito sign_up, confirm_sign_up, sign_in, get_user, admin_set_role |
+| `jwt_verifier.py` | `CognitoJWTVerifier` | RS256 JWT verification using Cognito JWKS endpoint |
+| `dynamodb.py` | `DynamoDBAdapter` | Single-table DynamoDB: users, sessions, KB metadata, execution profiles |
+| `bedrock_kb_manager.py` | `BedrockKBManager` | Full KB lifecycle: create, add S3 source, sync, status, delete |
 
-### `adapters/aws/` — Secure Cloud Connection Adapters
-* **`adapters/aws/boto3_factory.py`**: The single authorized provider of verified AWS client and high-level resource objects, standardizing timeout windows and network retries globally.
-* **`adapters/aws/dynamodb_session.py`**: Implements the `DynamoDBSessionRepository` interface. Snapshots serial session state variables into the specialized `vega-agent-sessions` table as a permanent container-recovery failover structure.
+**DynamoDB Key Schema:**
+```
+PK                    SK                   EntityType
+────────────────────  ──────────────────   ──────────────
+USER#<sub>            PROFILE              User
+USER#<sub>            SESSION#<sid>        ChatSession
+KB#<kb_id>            META                 KnowledgeBase
+PROFILE#<agent_id>    VERSION#<ver>        ExecutionProfile
+```
 
-### `entrypoints/` — Specialized Cloud Hosting Environments
-* **`entrypoints/agent_gateway.py`**: The lean serverless runtime entry loop executed natively inside sandboxed AWS MicroVM task clusters using the `BedrockAgentCoreApp` SDK. Completely omits web server layer overhead and REST auth frameworks.
+### 3. `agents/` — Agent Logic & Prompts
+
+| File | What It Does |
+|------|-------------|
+| `prompts.py` | `PROMPT_TEMPLATES` dict keyed by prompt_template_id. Contains the full structured XML prompt for the underwriting agent. `get_prompt(template_id, role)` returns the right prompt. |
+| `underwriting_agent.py` | `UnderwritingAgent` class: builds a Strands Agent from an ExecutionProfile, handles invocation, extracts follow-up questions, deduplicates them against history, and returns structured response with citations. |
+| `tools/retriever.py` | `search_manuals` Strands tool: calls Bedrock KB Retrieve API, extracts text chunks + metadata (source URL, heading, manual name). Thread-local storage for last retrieval sources. |
+
+**Key function: `UnderwritingAgent.invoke()`**
+```
+query → build/cache Strands Agent → restore history → execute → 
+  parse answer → extract follow-ups → deduplicate → get citations → 
+  return {answer, citations, follow_up_questions, sources, agent_messages}
+```
+
+### 4. `services/` — Business Logic
+
+| File | Class | Purpose |
+|------|-------|---------|
+| `agent_service.py` | `AgentService` | **Central orchestrator**: loads profile → builds agent → loads session history → invokes → saves session → returns response |
+| `authorization.py` | `AuthorizationService` | Checks identity has user_id, validates tool-level role restrictions |
+| `guardrails.py` | `GuardrailService` | Calls Bedrock Guardrails API for input/output content filtering |
+| `memory.py` | `AgentCoreMemoryProvider` | Reads/writes DynamoDB sessions as memory context |
+| `model_gateway.py` | `BedrockModelGateway` | Builds Strands Agents from ExecutionProfiles, invokes, returns structured results |
+| `telemetry.py` | `CloudWatchTelemetryEmitter` | Emits invocation metrics to CloudWatch |
+| `audit.py` | `MetadataOnlyAuditLogger` | Structured audit logging (no raw prompts/responses) |
+| `tool_gateway.py` | `AgentCoreReadOnlyToolGateway` | Validates tool permissions; blocks non-read actions |
+
+**AgentService.invoke() flow:**
+```python
+async def invoke(request, identity):
+    profile = load_or_default_profile(request.agent_id)
+    agent = get_or_create_agent(profile)
+    session = dynamodb.get_session(identity.user_id, request.session_id)
+    history = session.messages if session else []
+    result = await agent.invoke(query, role, history)
+    dynamodb.save_session(user_id, session_id, title, messages)
+    return AgentInvocationResponse(...)
+```
+
+### 5. `runtime/` — Orchestration Pipeline
+
+| File | Class | Purpose |
+|------|-------|---------|
+| `orchestrator.py` | `RuntimeOrchestrator` | 12-step pipeline: authorize → guardrails → memory → model → tools → compose → audit |
+| `base_agent.py` | `BaseAgent` | Abstract base class, delegates to orchestrator |
+| `strands_agent.py` | `StrandsBaseAgent`, `RetrievalAgent`, `ReadOnlyToolAgent` | Agent type definitions |
+| `response_composer.py` | `ResponseComposer` | Assembles final `AgentInvocationResponse` from model results |
+| `host_adapter.py` | `RuntimeHostAdapter` | Abstracts hosting: `LocalFastApiRuntimeHost` vs `AgentCoreRuntimeHost` |
+| `context_builder.py` | (various) | Builds execution context from request + profile |
+
+### 6. `app/` — FastAPI Application
+
+#### Routers
+
+| File | Prefix | Endpoints |
+|------|--------|-----------|
+| `auth_router.py` | `/v1/auth` | `POST /signup`, `POST /confirm`, `POST /login` |
+| `agent_router.py` | `/v1/agents` | `POST /{agent_id}/invoke`, `GET /{agent_id}/health` |
+| `session_router.py` | `/v1/sessions` | `GET /`, `GET /{id}`, `DELETE /{id}` |
+| `kb_router.py` | `/v1/knowledge-bases` | `POST /`, `GET /`, `GET /{id}`, `POST /{id}/sync`, `DELETE /{id}` |
+| `health.py` | `/` | `GET /health`, `GET /ping`, `GET /ready` |
+
+#### Dependencies
+
+| File | Purpose |
+|------|---------|
+| `identity.py` | Extracts `IdentityContext` from JWT `Authorization` header via `CognitoJWTVerifier` |
+| `services.py` | DI container for `get_orchestrator()`, `get_agent_service()`, `get_dynamodb_adapter()` |
+| `settings.py` | Pydantic Settings class loading from `.env` |
+
+#### Middleware
+
+| File | Purpose |
+|------|---------|
+| `correlation.py` | Injects `X-Correlation-ID` header on every request/response |
+| `errors.py` | Global error handler returning structured JSON errors |
+
+#### `app/main.py` — Application Entry Point
+
+Uses FastAPI `lifespan` for service initialization:
+1. Load environment config
+2. Create `Boto3SessionFactory`
+3. Initialize `CognitoAdapter` + JWT verifier
+4. Create `DynamoDBAdapter`
+5. Initialize all services (authorization, guardrails, memory, model gateway, etc.)
+6. Create `RuntimeOrchestrator`
+7. Create `AgentService`
+8. Create `BedrockKBManager`
+9. Wire all routers (`init_auth_router`, `init_session_router`, etc.)
+10. Mount Gradio UI at `/ui`
+
+### 7. `ui/gradio_app.py` — Gradio Web Interface
+
+Features:
+- **Auth flow**: Signup → email verification → Login (all via Cognito APIs)
+- **Chat**: Streaming conversation with follow-up question chips
+- **Session management**: Load/create/clear chat sessions via sidebar dropdown
+- **KB management**: Create Knowledge Bases (underwriter role only)
+- **Glassmorphism UI**: Premium design with gradient message bubbles
+
+### 8. `control_plane/` — Agent Registry & Deployment
+
+| File | Purpose |
+|------|---------|
+| `agent_registry.py` | Manages agent registrations (backed by DynamoDB) |
+| `execution_profile_repository.py` | Loads ExecutionProfiles from DynamoDB or local JSON |
+| `kb_manager.py` | KB provisioning for the bootstrap pipeline |
+| `memory_manager.py` | Memory provisioning for the bootstrap pipeline |
+| `deployment_manager.py` | Cloud deployment orchestration |
+
+### 9. `entrypoints/agent_gateway.py` — AgentCore MicroVM
+
+Lean event listener for native Bedrock AgentCore Runtime. Receives payloads, creates `AgentInvocationRequest` + `IdentityContext`, runs through the orchestrator, and returns response.
+
+### 10. `scripts/` — CLI & Automation
+
+| File | Purpose |
+|------|---------|
+| `pre_push_check.py` | Pre-commit CI: ruff lint + format + pytest |
+| `platform_bootstrap.py` | Automated agent deployment pipeline |
+| `query.py` | CLI tool: invoke agent directly without server |
+| `split_manual.py` | Split large markdown files into sections for KB ingestion |
+| `crawlers/` | Web crawlers for data ingestion into S3 |
 
 ---
 
-## 🔄 3. Master Sequential Request Execution Pipeline
+## Data Flow: Agent Invocation
 
-Regardless of whether a caller queries `app/main.py` via HTTP REST or triggers `entrypoints/agent_gateway.py` via an internal AWS event stream, the shared `RuntimeOrchestrator` executes the exact same sequence:
-
-```text
- 1. Agent Registry Validation    ──► Load agent profile parameters and execution constraints.
- 2. Profile Hydration            ──► Extract target model ID, specific KB arrays, and Memory configurations.
- 3. Identity Authorization       ──► Ensure request context roles align with the profile's access policy.
- 4. Input Guardrails Check       ──► Run prompt validation rules to filter dangerous structural text parameters.
- 5. Long-Term Memory (LTM) Read  ──► Retrieve factual insights, semantic context, and cross-session user summaries.
- 6. Vector Knowledge Retrieval   ──► Execute Bedrock Knowledge Base searches for context citations.
- 7. Direct Model Gate Invoke     ──► Send generation context array to target Bedrock LLMs (amazon.nova-pro-v1:0).
- 8. Tool Adapter Gateways        ──► Fire read-only integrations securely to resolve domain logic lookups.
- 9. Raw Response Composition     ──► Structure model texts and source objects into standardized payloads.
-10. Output Guardrails Check      ──► Validate generated string objects to ensure no sensitive leakage.
-11. LTM Memory Buffer Flush      ──► Write summarized context updates directly back to semantic memory engines.
-12. Stateless Compute Snapshot   ──► Serialize session state arrays to the vega-agent-sessions DynamoDB table.
-13. Observability Stream Egress  ──► Write processing timing statistics directly to CloudWatch logs.
-14. Audit Trace Commitment       ──► Record structural metadata fields securely without logging raw prompts.
-15. Response Return              ──► Send full typed JSON object back to original caller transport target.
+```
+User clicks "Send" in Gradio UI
+  │
+  ▼
+POST /v1/agents/coaction-underwriting/invoke
+  │  Body: { input_text, session_id, top_k }
+  │  Header: Authorization: Bearer <Cognito JWT>
+  │
+  ▼
+agent_router.py → identity.py extracts IdentityContext from JWT
+  │
+  ▼
+AgentService.invoke(request, identity)
+  │
+  ├── 1. Load ExecutionProfile (DynamoDB → env defaults)
+  ├── 2. Get/create UnderwritingAgent (cached by profile+role)
+  ├── 3. Load session history from DynamoDB
+  ├── 4. agent.invoke(query, role, history)
+  │       │
+  │       ├── Build Strands Agent (BedrockModel + system prompt + search_manuals tool)
+  │       ├── Restore conversation history
+  │       ├── Execute: agent(query)
+  │       │     └── Strands calls search_manuals tool → Bedrock KB Retrieve API
+  │       ├── Parse answer, extract follow-ups, deduplicate
+  │       └── Return {answer, citations, follow_up_questions, sources}
+  │
+  ├── 5. Build AgentInvocationResponse
+  ├── 6. Save session to DynamoDB (messages + title)
+  └── 7. Return response to UI
 ```
 
 ---
 
-## 💻 4. Running Locally in Development Mode
+## Adding a New Feature: Checklist
 
-To run, debug, and trace the application natively on your local machine using configuration fallbacks:
-
-### Prerequisites
-1. Ensure your current machine working folder contains a valid `.env` configuration mapping. Use `.env.example` as a template guide:
-```properties
-MODEL_PROVIDER=bedrock
-BEDROCK_MODEL_ID=amazon.nova-pro-v1:0
-AGENTCORE_MEMORY_ENABLED=true
-AGENTCORE_MEMORY_ID=your_development_memory_id
-```
-2. Verify local development AWS profile access keys are fully initialized in your terminal window credentials environment so `Boto3SessionFactory` can securely query your cloud database clusters and vector engines.
-
-### Execution Command (FastAPI Live REST Shell)
-Trigger the Uvicorn web wrapper directly:
-```powershell
-uvicorn app.main:app --reload --port 8080
-```
-* **Liveness Verification**: Navigate to `http://localhost:8080/health` or verify documentation interfaces natively via `http://localhost:8080/docs`.
-
-### Testing Local API Target Ingress
-Submit a test prompt via `curl` or Postman targeting your primary mapped agent:
-```powershell
-curl -X POST "http://localhost:8080/v1/agents/coaction_binding_authority_bot/invoke" `
-  -H "Content-Type: application/json" `
-  -H "X-User-Id: dev_engineer" `
-  -H "X-Correlation-Id: test_local_run" `
-  -d "{\"input_text\": \"What is class code 10040?\"}"
-```
-**Outcome**: The FastAPI layer intercepts custom JSON header context mappings, populates its validation schemas, triggers the underlying logic pipeline, and streams back real cloud-generated conversation output.
+1. **New domain model?** → Add to `domain/models.py`
+2. **New AWS adapter?** → Add to `adapters/aws/`
+3. **New API endpoint?** → Create router in `app/routers/`, import in `app/main.py`
+4. **New agent type?** → Add prompt to `agents/prompts.py`, add agent class if needed
+5. **New service?** → Add to `services/`, wire in `app/main.py` lifespan
+6. **Always** → Run `python scripts/pre_push_check.py --fix` before pushing
 
 ---
 
-## ⚖️ 5. Dual-Stage Container Footprint Mechanics
-
-The project implements a canonical multi-stage Dockerfile enabling absolute infrastructure independence.
-
-### Image Architecture (`Dockerfile`)
-* **Base Layer**: Pulls optimized, minimal Python 3.11 execution foundations. Compiles OS system extensions natively.
-* **Target A (`--target runtime`)**: Renders a zero-FastAPI footprint layer. Intended exclusively for lean deployment straight to private Bedrock MicroVM serverless hosting nodes.
-* **Target B (`--target api`)**: Renders a complete Uvicorn HTTP wrapper context. Distributed cleanly to ECS/Fargate container groups to host client application UI portals securely.
-
-This architecture ensures zero-downtime scalability, absolute isolation of internal and external execution planes, and highly robust state persistence across dynamic serverless pools.
+**Maintained by**: Coaction Agent Platform Engineering Team  
+👉 **[README](./README.md)** · **[Runbook](./agent_platform_runbook.md)**

@@ -1,42 +1,39 @@
+# coaction_agent_platform/runtime/base_agent.py
+"""Base agent classes per HLD Section 8.
+
+All agents extend BaseAgent. The base agent delegates execution
+to the RuntimeOrchestrator, which enforces the standard sequence.
 """
-Base agent — abstract contract that ALL agents in the platform implement.
 
-WHY THIS EXISTS:
-─────────────────
-This is NOT "unimplemented code". It's an abstract base class (ABC) — a contract.
-Every agent (retrieval bot, tool bot, future bots) must implement these two methods.
-
-HIERARCHY:
-  BaseAgent (this file — defines the contract)
-    └── StrandsBaseAgent (strands_agent.py — real Strands+OpenAI/Bedrock implementation)
-          ├── RetrievalAgent (agents/retrieval_agent.py — e.g. coaction_binding_authority_bot)
-          └── ReadOnlyToolAgent (agents/readonly_agent.py — future tool-based agents)
-
-The old "BedrockKBAgent" logic now lives in StrandsBaseAgent.
-RetrievalAgent extends it with zero extra code because the base already does everything.
-"""
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from runtime.orchestrator import RuntimeOrchestrator
+
+from domain.models import (
+    AgentInvocationRequest,
+    AgentInvocationResponse,
+    IdentityContext,
+)
 
 
 class BaseAgent(ABC):
     """Abstract base for all Coaction agents."""
 
-    def __init__(self, agent_id: str):
+    def __init__(self, agent_id: str, orchestrator: "RuntimeOrchestrator") -> None:
         self.agent_id = agent_id
+        self.orchestrator = orchestrator
+
+    async def invoke(
+        self,
+        request: AgentInvocationRequest,
+        identity: IdentityContext,
+    ) -> AgentInvocationResponse:
+        """Invoke the agent via the standard orchestration pipeline."""
+        return await self.orchestrator.execute(request, identity)
 
     @abstractmethod
     def agent_type(self) -> str:
-        """Return agent type identifier (e.g. 'retrieval_agent', 'readonly_tool_agent')."""
-        ...
-
-    @abstractmethod
-    async def invoke(self, query: str, session_id: str, role: str = "underwriter", **kwargs) -> dict:
-        """
-        Invoke the agent. Returns dict with:
-          - answer: str
-          - sources: list[str]
-          - follow_up_questions: list[str]
-          - model_id: str
-          - session_id: str
-        """
-        ...
+        """Return the agent type identifier."""
+        raise NotImplementedError

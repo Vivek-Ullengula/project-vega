@@ -29,6 +29,7 @@ class Boto3SessionFactory:
         # Use explicit credentials when available (local dev),
         # otherwise fall back to the default credential chain (IAM role in cloud)
         from app.dependencies.settings import get_settings
+
         settings = get_settings()
         session_kwargs = {"region_name": region_name}
         if settings.aws_access_key_id and settings.aws_secret_access_key:
@@ -56,4 +57,3 @@ class Boto3SessionFactory:
             region_name=self.region_name,
             config=self.config,
         )
-

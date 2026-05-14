@@ -4,9 +4,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+
 class MemoryManager:
     """Automates creation and management of Bedrock AgentCore Memory resources."""
-    
+
     def __init__(self, region_name="us-east-1"):
         self.client = boto3.client("bedrock-agentcore-control", region_name=region_name)
 
@@ -14,10 +15,7 @@ class MemoryManager:
         """Creates an AgentCore Memory resource."""
         try:
             logger.info(f"Creating AgentCore Memory: {name}")
-            response = self.client.create_memory(
-                name=name,
-                eventExpiryDuration=retention_days
-            )
+            response = self.client.create_memory(name=name, eventExpiryDuration=retention_days)
             mem_obj = response.get("memory", {})
             memory_id = mem_obj.get("id") or response.get("memoryId") or response.get("id") or name
             logger.info(f"Memory created with ID: {memory_id}")

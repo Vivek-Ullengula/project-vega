@@ -2,6 +2,7 @@
 Unified application settings.
 Loads all config from .env and environment variables.
 """
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
@@ -44,7 +45,9 @@ class Settings(BaseSettings):
     agentcore_memory_enabled: bool = False
     agentcore_memory_id: str | None = None
     agentcore_memory_event_expiry: int = 604800  # 7 days for short-term events
-    agentcore_memory_semantic_enabled: bool = True  # Enable semantic extraction for long-term memory
+    agentcore_memory_semantic_enabled: bool = (
+        True  # Enable semantic extraction for long-term memory
+    )
 
     # Guardrails
     guardrail_id: str | None = None

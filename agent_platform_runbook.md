@@ -1,98 +1,103 @@
-# Enterprise Multi-Agent Core: Architecture & Operations Runbook
+# Coaction Agent Platform — Operations Runbook
 
-This comprehensive guide serves as the authoritative operational manual for deploying, running, and scaling multi-agent architectures on the **Coaction Agent Platform**. It covers the end-to-end process for building out a completely clean cloud environment from scratch, configuring enterprise network boundaries, and leveraging the **Zero-Code Onboarding** loop to deploy new agents dynamically without container repushes.
+This is the operational manual for deploying, running, and scaling multi-agent architectures on **Project Vega**. It covers ground-up AWS provisioning, the automated bootstrap pipeline, manual agent creation, verification procedures, and troubleshooting.
 
 ---
 
 ## 📑 Table of Contents
-1. **[Operational Paradigm & Architecture Overview](#1-operational-paradigm--architecture-overview)**
-2. **[Phase 1: Ground-Up Environment Provisioning (New Account/Region)](#2-phase-1-ground-up-environment-provisioning-new-accountregion)**
-   - [A. S3 Storage Persistence Setup](#a-s3-storage-persistence-setup)
-   - [B. Aurora PostgreSQL Vector Database Cluster](#b-aurora-postgresql-vector-database-cluster)
-   - [C. Enterprise IAM Execution Role & Policies](#c-enterprise-iam-execution-role--policies)
-   - [D. Amazon Bedrock Knowledge Base (KB) Integration](#d-amazon-bedrock-knowledge-base-kb-integration)
-3. **[Phase 2: One-File Deployment Automation](#3-phase-2-one-file-deployment-automation)**
-   - [The Universal Bootstrap Driver (`platform_bootstrap.py`)](#the-universal-bootstrap-driver-platform_bootstrappy)
-4. **[Phase 3: The "Zero-Push" Onboarding Loop (Existing Environments)](#4-phase-3-the-zero-push-onboarding-loop-existing-environments)**
-   - [Step-by-Step New Agent Deployment Guide](#step-by-step-new-agent-deployment-guide)
-5. **[Phase 4: Verification, Auditing, and Troubleshooting](#5-phase-4-verification-auditing-and-troubleshooting)**
-   - [CloudWatch Logs and Trace Patterns](#cloudwatch-logs-and-trace-patterns)
+1. [Architecture Overview](#1-architecture-overview)
+2. [Phase 1: AWS Environment Provisioning](#2-phase-1-aws-environment-provisioning)
+3. [Phase 2: Application Setup & Local Development](#3-phase-2-application-setup--local-development)
+4. [Phase 3: Agent Creation & Deployment](#4-phase-3-agent-creation--deployment)
+5. [Phase 4: CI/CD & Pre-Push Checks](#5-phase-4-cicd--pre-push-checks)
+6. [Phase 5: Verification & Troubleshooting](#6-phase-5-verification--troubleshooting)
 
 ---
 
-## 1. Operational Paradigm & Architecture Overview
+## 1. Architecture Overview
 
-To eliminate the operational friction of updating container registries (e.g., executing 30+ manual repushes to ECS/AgentCore to tune system prompts or tweak hyper-parameters), this platform centralizes **Agent Execution Logic** into a single shared, highly optimized runtime container base layer.
+The platform uses a **dual-ingress** pattern with shared runtime logic:
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    ENTERPRISE AWS CLOUD BOUNDARY                        │
-│                                                                         │
-│  ┌───────────────────────┐   ┌───────────────────────────────────────┐  │
-│  │  S3 Persistence Layer │   │ Aurora PostgreSQL Vector DB (RDS)     │  │
-│  │  (Session Histories)  │   │ (Knowledge Base Index Embeddings)     │  │
-│  └───────────▲───────────┘   └───────────────────▲───────────────────┘  │
-│              │ s3:PutObject                      │ PostgreSQL Protocol  │
-│              │ s3:GetObject                      │ (Security Groups)    │
-│  ┌───────────┴───────────────────────────────────┴───────────────────┐  │
-│  │             Shared AgentCore Runtime Container Target             │  │
-│  │             (Executes via VegaPlatformExecutionRole)              │  │
-│  └───────────┬───────────────────────────────────┬───────────────────┘  │
-│              │ bedrock:InvokeModel               │ bedrock:Retrieve     │
-│  ┌───────────▼───────────────────────────────────▼───────────────────┐  │
-│  │  Amazon Bedrock Native Models                 │ Amazon Bedrock KBs│  │
-│  │  (amazon.nova-pro-v1:0 / claude-3-haiku)      │ (Vector Retrieval)│  │
-│  └───────────────────────────────────────────────┴───────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                       AWS CLOUD BOUNDARY                             │
+│                                                                      │
+│  ┌────────────────┐  ┌─────────────────┐  ┌─────────────────────┐   │
+│  │  AWS Cognito    │  │  DynamoDB        │  │  Aurora PostgreSQL  │   │
+│  │  (Auth + JWT)   │  │  (Single Table)  │  │  (pgvector for KB)  │   │
+│  └───────┬────────┘  └────────┬────────┘  └──────────┬──────────┘   │
+│          │                    │                       │              │
+│  ┌───────▼────────────────────▼───────────────────────▼──────────┐   │
+│  │              Shared Agent Runtime Container                    │   │
+│  │                                                                │   │
+│  │   FastAPI (:8000)          AgentCore MicroVM (:8080)           │   │
+│  │   ├── /v1/auth/*           ├── /invocations                   │   │
+│  │   ├── /v1/agents/*/invoke  └── entrypoints/agent_gateway.py   │   │
+│  │   ├── /v1/sessions/*                                          │   │
+│  │   ├── /v1/knowledge-bases/*                                   │   │
+│  │   └── /ui (Gradio)                                            │   │
+│  └───────┬────────────────────────────────────────────┬──────────┘   │
+│          │                                            │              │
+│  ┌───────▼────────────────────────────────────────────▼──────────┐   │
+│  │  Amazon Bedrock Models          │  Bedrock Knowledge Bases    │   │
+│  │  (nova-pro, claude-sonnet)      │  (Vector Retrieval)         │   │
+│  └─────────────────────────────────┴─────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-### The Ingress Split
-* **FastAPI Target**: Serves frontends and API consumers over REST protocols, terminating client JWT authorizations, mapping tracing IDs, and maintaining strict OpenAPI documentation schemas.
-* **AgentCore Wrapper**: Subscribes directly to cloud events inside sandboxed MicroVM tasks. It initializes identical framework instances directly from the environment without spawning background threads or web sockets.
+### Key Services
+
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| Authentication | AWS Cognito | User signup, email confirm, JWT login |
+| Session Storage | DynamoDB (single-table) | Users, sessions, KB metadata, profiles |
+| Vector Store | Aurora PostgreSQL + pgvector | Knowledge Base embeddings |
+| Agent Runtime | Strands Agent SDK | Bedrock model invocation + tool calling |
+| Retrieval | Bedrock Knowledge Bases | Document search via `search_manuals` tool |
+| UI | Gradio | Chat interface with auth + KB management |
 
 ---
 
-## 2. Phase 1: Ground-Up Environment Provisioning (New Account/Region)
+## 2. Phase 1: AWS Environment Provisioning
 
-When initializing the platform in a completely empty AWS organization footprint, execute the infrastructure deployment sequence in the following exact order.
+### A. DynamoDB Table
 
-### A. S3 Storage Persistence Setup
-Create a private, encrypted S3 bucket to persist raw conversation data files, session metadata history objects, and offline audit streams.
-1. **Creation**: Provision bucket `vega-binding-authority` (or region-specific equivalent) with **Block All Public Access** completely enabled.
-2. **Encryption**: Enforce Server-Side Encryption using Amazon S3-managed keys (SSE-S3) or customer-managed KMS keys.
-3. **Bucket Policy Envelope**: Apply explicit bucket-level isolation rules:
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "RequireEncryptedTransport",
-            "Effect": "Deny",
-            "Principal": "*",
-            "Action": "s3:*",
-            "Resource": [
-                "arn:aws:s3:::vega-binding-authority",
-                "arn:aws:s3:::vega-binding-authority/*"
-            ],
-            "Condition": {
-                "Bool": {
-                    "aws:SecureTransport": "false"
-                }
-            }
-        }
-    ]
-}
+Create a single table for all platform data:
+
+```bash
+aws dynamodb create-table \
+  --table-name CoactionPlatform \
+  --attribute-definitions \
+    AttributeName=PK,AttributeType=S \
+    AttributeName=SK,AttributeType=S \
+  --key-schema \
+    AttributeName=PK,KeyType=HASH \
+    AttributeName=SK,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST
 ```
 
-### B. Aurora PostgreSQL Vector Database Cluster
-Provision a highly resilient serverless database tier to maintain vector document embedding maps for dynamic Knowledge Base execution loops.
-1. **Engine Selection**: Launch an **Amazon Aurora PostgreSQL-Compatible Edition** cluster (Serverless v2 recommended to optimize cost allocation during low-traffic periods).
-2. **Network Security Group**: Restrict inbound port `5432` access completely. Permit network traffic ingress *only* from the explicit VPC subnet class hosting your AWS Lambda/MicroVM agent worker tasks.
-3. **Database Preparation**: Authenticate against the primary instance endpoint and compile active vector engine extensions:
+The table uses composite keys:
+- `USER#<sub>` + `PROFILE` → User profiles
+- `USER#<sub>` + `SESSION#<sid>` → Chat sessions
+- `KB#<id>` + `META` → Knowledge Base metadata
+- `PROFILE#<agent_id>` + `VERSION#<ver>` → Execution profiles
+
+### B. AWS Cognito User Pool
+
+1. Create a **User Pool** with email-based sign-in
+2. Add a custom attribute: `custom:role` (string, mutable)
+3. Create an **App Client** with `USER_PASSWORD_AUTH` flow enabled
+4. Note: `COGNITO_USER_POOL_ID` and `COGNITO_APP_CLIENT_ID`
+
+### C. Aurora PostgreSQL (for Bedrock KB)
+
+1. Launch **Aurora PostgreSQL-Compatible** (Serverless v2)
+2. Restrict port `5432` to your VPC subnets only
+3. Enable pgvector:
+
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
 CREATE SCHEMA IF NOT EXISTS bedrock_integration;
 
 CREATE TABLE IF NOT EXISTS bedrock_integration.bedrock_kb (
@@ -105,230 +110,276 @@ CREATE TABLE IF NOT EXISTS bedrock_integration.bedrock_kb (
 CREATE INDEX ON bedrock_integration.bedrock_kb USING hnsw (embedding vector_cosine_ops);
 ```
 
-### C. Enterprise IAM Execution Role & Policies
-The operational anchor of your multi-agent infrastructure is the specialized runtime role (`VegaPlatformExecutionRole`). Provision this principal with granular inline capabilities.
+### D. S3 Bucket for Documents
 
-#### 1. Trust Relationship Policy
-Permit the Bedrock cloud runtime and custom worker targets to securely request execution credentials:
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "bedrock.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    },
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "ecs-tasks.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
+```bash
+aws s3 mb s3://vega-binding-authority --region us-east-1
+aws s3api put-public-access-block \
+  --bucket vega-binding-authority \
+  --public-access-block-configuration \
+    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 ```
 
-#### 2. Definitive Operational Permissions JSON
-Attach an inline IAM policy granting precise task capabilities across targeted AWS resources:
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowBedrockModelInference",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
-      ],
-      "Resource": [
-        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0",
-        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
-      ]
-    },
-    {
-      "Sid": "AllowBedrockKnowledgeBaseRetrieval",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:Retrieve",
-        "bedrock:RetrieveAndGenerate"
-      ],
-      "Resource": "arn:aws:bedrock:us-east-1:513847850768:knowledge-base/*"
-    },
-    {
-      "Sid": "AllowS3PersistenceStorage",
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::vega-binding-authority",
-        "arn:aws:s3:::vega-binding-authority/*"
-      ]
-    },
-    {
-      "Sid": "AllowCloudWatchObservabilityEmissions",
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": "arn:aws:logs:us-east-1:513847850768:log-group:/aws/bedrock-agentcore/*"
-    }
-  ]
-}
-```
-> [!WARNING]
-> **Service Control Policy (SCP) Overrides**: If your enterprise enforces multi-region SCP blocks containing explicit regional deny conditions, avoid configuring regional cross-region IDs (`us.anthropic...`). Natively leverage specific local IDs like `amazon.nova-pro-v1:0` to guarantee pure intra-region routing compliance.
+### E. IAM Execution Role
 
-### D. Amazon Bedrock Knowledge Base (KB) Integration
-1. Access the **Amazon Bedrock Console** -> **Knowledge Bases** -> **Create Knowledge Base**.
-2. Assign the previously configured IAM execution role (`VegaPlatformExecutionRole`).
-3. Connect your target S3 document storage bucket as the definitive data input source.
-4. Select the target **Embedding Model** (e.g., `amazon.titan-embed-text-v2:0` or equivalent matching vector schema lengths).
-5. Configure Vector Storage settings to target your Aurora PostgreSQL database cluster exactly, mapping schema credentials via AWS Secrets Manager securely.
-6. Synchronize the Data Source to index parsed vector strings straight into Postgres tables. Note the generated authoritative **Knowledge Base ID string** (e.g., `2KMBSFAGGS`).
+Create `VegaPlatformExecutionRole` with permissions for:
+- `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream`
+- `bedrock:Retrieve`, `bedrock:RetrieveAndGenerate`
+- `bedrock-agent:CreateKnowledgeBase`, `bedrock-agent:StartIngestionJob` etc.
+- `s3:GetObject`, `s3:PutObject`, `s3:ListBucket`
+- `dynamodb:PutItem`, `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:DeleteItem`
+- `cognito-idp:*` (for user management)
+- `logs:CreateLogStream`, `logs:PutLogEvents`
+
+### F. Bedrock Knowledge Base
+
+1. AWS Console → Bedrock → Knowledge Bases → Create
+2. Assign `VegaPlatformExecutionRole`
+3. Select embedding model: `amazon.titan-embed-text-v2:0`
+4. Connect Aurora PostgreSQL as vector store
+5. Add S3 data source → Sync
+6. Note the **Knowledge Base ID** (e.g., `2KMBSFAGGS`)
+
+Or create programmatically via the API:
+```bash
+curl -X POST http://localhost:8000/v1/knowledge-bases \
+  -H "Authorization: Bearer <token>" \
+  -d '{"name": "my-kb", "s3_bucket": "vega-binding-authority", "s3_prefix": "docs/"}'
+```
 
 ---
 
-## 3. Phase 2: One-File Deployment Automation
+## 3. Phase 2: Application Setup & Local Development
 
-Once base cloud resources are fully allocated, deploy the multi-agent control logic instantly using the centralized cloud bootstrap engine.
+### Environment Configuration
 
-### The Universal Bootstrap Driver (`platform_bootstrap.py`)
-This script securely queries running environment resources, aggregates connection topologies, verifies agent mappings, and natively issues rolling microVM Task synchronizations.
+Create `.env` at project root:
 
-#### Execution Command
-```powershell
-python scripts/platform_bootstrap.py <agent_id> <s3_bucket> <iam_role_arn>
+```env
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=your-key
+AWS_SECRET_ACCESS_KEY=your-secret
+
+COGNITO_USER_POOL_ID=us-east-1_XXXXXXX
+COGNITO_APP_CLIENT_ID=your-client-id
+
+DYNAMODB_TABLE_NAME=CoactionPlatform
+
+BEDROCK_KB_ID=your-kb-id
+BEDROCK_MODEL_ID=amazon.nova-pro-v1:0
+
+BEDROCK_KB_ROLE_ARN=arn:aws:iam::...:role/VegaPlatformExecutionRole
+EMBEDDING_MODEL_ARN=arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0
 ```
 
-#### What It Does Under the Hood:
-1. Parses string fields from local `.env` cache envelopes dynamically.
-2. Auto-resolves Aurora PostgreSQL cluster topologies by querying `rds.describe_db_clusters()`, substituting real DNS reader host strings to completely prevent `localhost` socket connection drops inside remote MicroVM network contexts.
-3. Injects authoritative model profiles (`MODEL_PROVIDER=bedrock` and `BEDROCK_MODEL_ID=amazon.nova-pro-v1:0`) directly into microVM task settings.
-4. intercepts resource creation collisions (`ConflictException`) smoothly, executing an idempotent parameter update mapping across running clusters without causing service downtimes.
+### Running Locally
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+pip install ruff pytest   # Development tools
+
+# Start the platform (API + UI)
+python main.py
+# → API at http://localhost:8000/v1
+# → UI at http://localhost:8000/ui
+# → Docs at http://localhost:8000/docs
+
+# CLI testing (no server required)
+python scripts/query.py "What class codes cover restaurants?"
+python scripts/query.py --interactive
+```
+
+### Docker
+
+```bash
+docker build -t project-vega .
+docker run -p 8000:8000 --env-file .env project-vega
+```
 
 ---
 
-## 4. Phase 3: The "Zero-Push" Onboarding Loop (Existing Environments)
+## 4. Phase 3: Agent Creation & Deployment
 
-To scale operations, add new agents dynamically without modifying the container layer or repushing image files.
+### Method A: Manual Creation
 
-```text
-┌────────────────────────────────────────────────────────┐
-│            ZERO-CODE ONBOARDING WORKFLOW               │
-│                                                        │
-│  1. Create JSON Profile  ──►  2. Define System Prompt  │
-│     (profiles/<id>.json)         (prompt_repository.py)│
-│               │                         │              │
-│               └────────────┬────────────┘              │
-│                            ▼                           │
-│                 3. Execute One-Line Sync               │
-│                    (platform_bootstrap.py)             │
-│                            │                           │
-│                            ▼                           │
-│                 Agent Instantly Active                 │
-└────────────────────────────────────────────────────────┘
-```
-
-### Step-by-Step New Agent Deployment Guide
-
-#### Step 1: Create the Definitive Configuration Profile JSON
-Drop a dedicated metadata block into `profiles/<agent_id>.json`. For example, to instantiate a new specialized **Claims Compliance Bot**:
-```json
-{
-  "agent_id": "claims_compliance_bot",
-  "version": "1.0",
-  "orchestration_framework": "strands",
-  "prompt_template_id": "claims_compliance_bot",
-  "model_profile": {
-    "provider": "bedrock",
-    "model_id": "amazon.nova-pro-v1:0",
-    "temperature": 0.0,
-    "max_tokens": 2048
-  },
-  "retrieval_profile": {
-    "provider": "bedrock_knowledge_base",
-    "enabled": true,
-    "knowledge_base_ids": ["KBCLAIMS99"],
-    "reranking_enabled": true,
-    "citations_required": true
-  },
-  "memory_profile": {
-    "provider": "agentcore_memory",
-    "enabled": true,
-    "memory_id": "mem_claims_compliance_v1",
-    "memory_scope": "agent_session",
-    "retention_days": 90,
-    "ltm_strategies": ["SEMANTIC"]
-  },
-  "session_profile": {
-    "provider": "s3",
-    "bucket": "vega-binding-authority",
-    "prefix": "sessions/"
-  }
-}
-```
-
-#### Step 2: Register System Prompt Behavior
-Open `control_plane/prompt_repository.py` and populate its mapped system configuration block:
+**Step 1** — Define the system prompt in `agents/prompts.py`:
 ```python
-self._templates["claims_compliance_bot"] = (
-    "You are an expert internal claims compliance auditor. Your sole task is to verify "
-    "submitted processing requests against active carrier documentation files. Ensure all "
-    "determinations are accompanied by explicit manual citations."
+PROMPT_TEMPLATES["my_new_agent_v1"] = """<role>
+You are an expert assistant for XYZ domain.
+</role>
+
+<core_directives>
+1. NO HALLUCINATION: Every fact must be from retrieved context.
+2. CITATION: Include sources for every response.
+</core_directives>
+
+<response_format>
+- Answer first, then citations, then follow-up questions.
+</response_format>
+"""
+```
+
+**Step 2** — Create a Knowledge Base (via console or API):
+```bash
+# Via the platform API (underwriter role required)
+curl -X POST http://localhost:8000/v1/knowledge-bases \
+  -H "Authorization: Bearer <jwt>" \
+  -d '{"name": "my-kb", "s3_bucket": "my-bucket", "s3_prefix": "docs/"}'
+```
+
+**Step 3** — Store an Execution Profile in DynamoDB:
+```python
+from adapters.aws.dynamodb import DynamoDBAdapter
+
+db = DynamoDBAdapter(table_name="CoactionPlatform")
+db.save_execution_profile(
+    agent_id="my-new-agent",
+    version="latest",
+    profile_data={
+        "agent_id": "my-new-agent",
+        "version": "1.0",
+        "prompt_template_id": "my_new_agent_v1",
+        "model_profile": {"model_id": "amazon.nova-pro-v1:0"},
+        "retrieval_profile": {"knowledge_base_ids": ["YOUR_KB_ID"]},
+        "memory_profile": {"enabled": True},
+    }
 )
 ```
 
-#### Step 3: Trigger Live Environment Synchronization
-Execute your single operational driver interface directly:
-```powershell
-python scripts/platform_bootstrap.py claims_compliance_bot vega-binding-authority arn:aws:iam::513847850768:role/VegaPlatformExecutionRole
-```
-**Done!** The platform runtime parses the JSON document during container execution, auto-discovers configured parameters, initializes the target foundation model using intra-region network credentials, maps targeted vector data layers, and processes live inbound execution calls cleanly. **No new Docker files required.**
-
----
-
-## 5. Phase 4: Verification, Auditing, and Troubleshooting
-
-### CloudWatch Logs and Trace Patterns
-When diagnosing serverless microVM behaviors, access targeted log stream footprints via the **Amazon CloudWatch Console** under the following authoritative Log Group paths:
-```text
-/aws/bedrock-agentcore/runtimes/<agent_id>-<runtime_hash>-DEFAULT
+**Step 4** — Invoke the agent:
+```bash
+curl -X POST http://localhost:8000/v1/agents/my-new-agent/invoke \
+  -H "Authorization: Bearer <jwt>" \
+  -d '{"input_text": "What are the coverage limits?"}'
 ```
 
-#### Standard Audit Trace Egress
-Successful invocations emit clean structured metadata streams detailing processing speeds and source mapping counts:
+### Method B: Automated Pipeline (Single Command)
+
+**Step 1** — Create `profiles/my_agent.json`:
 ```json
 {
-  "timestamp": "2026-05-12T15:36:47Z",
-  "level": "INFO",
-  "logger": "audit_telemetry",
-  "event": "agent_invocation_complete",
-  "metadata": {
-    "agent_id": "vega_binding_authority_bot",
-    "session_id": "68514a2b-717d-4be6-9a1c-774a52af1a4a",
-    "model_id": "amazon.nova-pro-v1:0",
-    "retrieval_citations_count": 3,
-    "execution_duration_ms": 1420
-  }
+  "agent_id": "my-new-agent",
+  "version": "1.0",
+  "prompt_template_id": "my_new_agent_v1",
+  "s3_bucket": "my-data-bucket",
+  "s3_prefix": "docs/my-agent/",
+  "model_profile": {"model_id": "amazon.nova-pro-v1:0"},
+  "retrieval_profile": {"knowledge_base_ids": [], "enabled": true}
 }
 ```
 
-#### Common Runtime Error Classifications & Remedies
-| Observed Log Stream Signature | Root Architectural Cause | Complete Corrective Action |
-| :--- | :--- | :--- |
-| `psycopg2.OperationalError: connection to server at "localhost" failed` | Serverless microVM lacks proper cloud network configuration variables. | Ensure `scripts/platform_bootstrap.py` executes correctly to dynamically discover real DB endpoints and propagate string config. |
-| `ValidationError: 1 validation error for IdentityContext correlation_id` | Universal entrypoint adapter omits tracking arguments. | Ensure container runtime uses fully aligned Pydantic dependency mappings as implemented in checkouts. |
-| `AccessDeniedException: explicit deny in a service control policy` | Requested foundation model enforces routing calls via cross-region inference profiles (`us.anthropic...`). | Switch runtime baseline model configuration mapping to local intra-region string IDs (e.g., `amazon.nova-pro-v1:0` or `claude-3-haiku`). |
+**Step 2** — Run the bootstrap script:
+```bash
+python scripts/platform_bootstrap.py \
+  my-new-agent \
+  my-data-bucket \
+  arn:aws:iam::123456:role/VegaPlatformExecutionRole
+```
+
+This automatically creates the KB, adds the S3 data source, triggers sync, and deploys the agent to Bedrock AgentCore.
 
 ---
-**Maintained by**: Coaction Advanced Multi-Agent Platform Engineering Taskforce.
-👉 **[Return to Main Project README](file:///c:/users/sainath.vinnakota/project-vega/README.md)**.
+
+## 4.5 Pushing Code Updates to Existing Agents
+
+If you modify `agents/prompts.py` or agent logic, you must push those changes to the AWS Bedrock AgentCore runtime.
+
+### Method A: Automated Deployment Pipeline
+This is the recommended approach for deploying code updates.
+
+**1. Authenticate and Push the Container to AWS ECR:**
+```bash
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <your-account-id>.dkr.ecr.us-east-1.amazonaws.com
+
+# Build specifically for AWS Graviton (ARM64)
+docker buildx build --target runtime --platform linux/arm64 -t <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/vega-platform:latest --push .
+```
+
+**2. Trigger the Automated AgentCore Update:**
+Run the bootstrap script again. Because the KB and Memory already exist, it skips creation, pulls your new container, and publishes a new version.
+```bash
+python scripts/platform_bootstrap.py \
+  <your_agent_id> \
+  <your_bucket_name> \
+  arn:aws:iam::<your-account-id>:role/VegaPlatformExecutionRole
+```
+AWS will automatically update your `DEFAULT` endpoint to point to the newly published version.
+
+### Method B: Manual Deployment via AWS Console
+If you do not want to use the automated script:
+1. Build and push your Docker container to ECR (same as Step 1 above).
+2. Open the **AWS Console** → **Bedrock** → **AgentCore**.
+3. Select your Agent Runtime.
+4. Click **Create Version** (this pulls the latest `:latest` container from ECR).
+5. Go to **Endpoints**, select the `DEFAULT` endpoint, click **Edit**, and change the associated version to the new version you just created.
+
+---
+
+## 5. Phase 4: CI/CD & Pre-Push Checks
+
+### Before Every Push
+
+```bash
+# Read-only check (recommended before push)
+python scripts/pre_push_check.py
+
+# Auto-fix lint + format
+python scripts/pre_push_check.py --fix
+```
+
+This runs:
+1. **Ruff Lint** — catches import errors, unused vars, bare excepts
+2. **Ruff Format** — enforces consistent code style
+3. **Pytest** — runs all unit tests
+
+### Makefile Targets
+
+```bash
+make lint     # ruff check
+make format   # ruff format
+make test     # pytest
+make check    # All three
+make fix      # Auto-fix + reformat
+```
+
+### GitHub Actions
+
+`.github/workflows/ci.yml` runs automatically on push/PR:
+- Ruff lint + format conformance
+- Pytest suite
+- (Optional) Docker build + ECR push + ECS deploy
+
+---
+
+## 6. Phase 5: Verification & Troubleshooting
+
+### Health Checks
+
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8000/ping
+curl http://localhost:8000/ready
+```
+
+### CloudWatch Logs
+
+Access log streams at:
+```
+/aws/bedrock-agentcore/runtimes/<agent_id>-<runtime_hash>-DEFAULT
+```
+
+### Common Errors & Fixes
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `psycopg2.OperationalError: connection to server at "localhost" failed` | MicroVM lacks cloud DB config | Run `platform_bootstrap.py` to inject real DB endpoints |
+| `JWTError: Unable to find matching key for kid` | Cognito JWKS key rotation | Restart app to flush JWKS cache |
+| `HTTPException 503: Auth service not initialized` | Missing `COGNITO_USER_POOL_ID` env var | Set Cognito env vars in `.env` |
+| `HTTPException 503: Agent service not initialized` | Lifespan startup failed | Check `DYNAMODB_TABLE_NAME` and AWS credentials |
+| `AccessDeniedException: service control policy` | Cross-region model ID | Use intra-region IDs like `amazon.nova-pro-v1:0` |
+
+---
+
+**Maintained by**: Coaction Agent Platform Engineering Team  
+👉 **[Return to README](./README.md)** · **[Codebase Guide](./codebase_detailed_guide.md)**

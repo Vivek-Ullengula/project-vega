@@ -2,6 +2,7 @@
 Full page crawler — preserves full pages with injected metadata for Bedrock Semantic Chunking.
 Usage: python -m scripts.crawlers.full_page_crawler
 """
+
 import asyncio
 import re
 import os
@@ -14,9 +15,9 @@ class FullPageCrawler(BaseCrawler):
         super().__init__(start_url)
 
     def clean_text(self, text: str) -> str:
-        text = re.sub(r'!\[.*?\]\(.*?\)', '', text, flags=re.DOTALL)
-        text = re.sub(r'AI-generated content may be incorrect\.', '', text)
-        text = re.sub(r'\[([^\]]+)\]\(https://bindingauthority[^\)]+#[^\)]+\)', r'\1', text)
+        text = re.sub(r"!\[.*?\]\(.*?\)", "", text, flags=re.DOTALL)
+        text = re.sub(r"AI-generated content may be incorrect\.", "", text)
+        text = re.sub(r"\[([^\]]+)\]\(https://bindingauthority[^\)]+#[^\)]+\)", r"\1", text)
         return text.strip()
 
     async def _crawl_recursive(self, url: str, crawler: AsyncWebCrawler):
@@ -27,17 +28,18 @@ class FullPageCrawler(BaseCrawler):
         print(f"Crawling: {norm_url}")
         config = CrawlerRunConfig(word_count_threshold=10)
         result = await crawler.arun(url=norm_url, config=config)
-        if not result.success:
+        if not getattr(result, "success", False):  # type: ignore
             return
-        cleaned = self.clean_text(result.markdown)
+        markdown = getattr(result, "markdown", "")  # type: ignore
+        cleaned = self.clean_text(markdown)
         class_code = self.extract_class_code(norm_url)
         metadata_header = f"SOURCE_URL: {norm_url}\n"
         if class_code:
             metadata_header += f"CLASS_CODE: {class_code}\n"
         metadata_header += "--- \n\n"
         self.page_contents[norm_url] = metadata_header + cleaned
-        links = self.extract_links(result.markdown)
-        tasks = [self._crawl_recursive(l, crawler) for l in links]
+        links = self.extract_links(markdown)
+        tasks = [self._crawl_recursive(lnk, crawler) for lnk in links]
         if tasks:
             await asyncio.gather(*tasks)
 
@@ -48,6 +50,7 @@ class FullPageCrawler(BaseCrawler):
 
 
 if __name__ == "__main__":
+
     async def fast_run():
         start_url = "https://bindingauthority.coactionspecialty.com/manuals/guide.html"
         output_dir = "data/bedrock_ingest/full_manuals"
@@ -57,10 +60,10 @@ if __name__ == "__main__":
         pages = await crawler.run()
         print(f"Crawled {len(pages)} pages. Saving to {output_dir}...")
         for url, content in pages.items():
-            name = url.split('/')[-1].replace('.html', '.md')
+            name = url.split("/")[-1].replace(".html", ".md")
             if not name:
                 name = "index.md"
-            with open(os.path.join(output_dir, name), 'w', encoding='utf-8') as f:
+            with open(os.path.join(output_dir, name), "w", encoding="utf-8") as f:
                 f.write(content)
         print(f"SUCCESS: {len(pages)} files saved!")
 
