@@ -127,11 +127,11 @@ def login_user(email: str, password: str):
         return (
             {"authenticated": False, "name": "", "email": "", "role": "", "token": ""},
             "Please enter both email and password.",
-            gr.update(visible=False),
-            gr.update(visible=True),
+            gr.Column(visible=False),
+            gr.Column(visible=True),
             "",
-            gr.update(choices=[]),
-            gr.update(visible=False),
+            gr.Dropdown(choices=[]),
+            gr.Accordion(visible=False),
         )
     try:
         r = requests.post(
@@ -146,13 +146,12 @@ def login_user(email: str, password: str):
             return (
                 {"authenticated": False, "name": "", "email": "", "role": "", "token": ""},
                 f"Login failed: {detail}",
-                gr.update(visible=False),
-            gr.update(visible=False),
-            gr.update(visible=True),
-            "",
-            gr.update(choices=[]),
-            gr.update(visible=False)
-        )
+                gr.Column(visible=False),
+                gr.Column(visible=True),
+                "",
+                gr.Dropdown(choices=[]),
+                gr.Accordion(visible=False),
+            )
         payload = r.json()
         user = payload.get("user", {})
         token = payload.get("access_token", "")
@@ -194,21 +193,21 @@ def login_user(email: str, password: str):
         return (
             session_user,
             welcome,
-            gr.update(visible=True),
-            gr.update(visible=False),
+            gr.Column(visible=True),
+            gr.Column(visible=False),
             welcome,
-            gr.update(choices=dropdown_choices),
-            gr.update(visible=is_underwriter),
+            gr.Dropdown(choices=dropdown_choices),
+            gr.Accordion(visible=is_underwriter),
         )
     except Exception as exc:
         return (
             {"authenticated": False, "name": "", "email": "", "role": "", "token": ""},
             f"Login failed: {connection_error_message(exc)}",
-            gr.update(visible=False),
-            gr.update(visible=True),
+            gr.Column(visible=False),
+            gr.Column(visible=True),
             "",
-            gr.update(choices=[]),
-            gr.update(visible=False),
+            gr.Dropdown(choices=[]),
+            gr.Accordion(visible=False),
         )
 
 
@@ -216,18 +215,18 @@ def logout_user():
     return (
         {"authenticated": False, "name": "", "email": "", "role": "", "token": ""},
         "Logged out.",
-        gr.update(visible=False),
-        gr.update(visible=True),
+        gr.Column(visible=False),
+        gr.Column(visible=True),
         "",
         [],  # chatbot
         "",  # session_state
-        gr.update(value="", visible=False),  # fu1
-        gr.update(value="", visible=False),  # fu2
-        gr.update(value="", visible=False),  # fu3
-        gr.update(visible=True),  # suggestions
+        gr.Button(value="", visible=False),  # fu1
+        gr.Button(value="", visible=False),  # fu2
+        gr.Button(value="", visible=False),  # fu3
+        gr.Row(visible=True),  # suggestions
         "",  # msg
-        gr.update(choices=[]),  # history_dropdown
-        gr.update(visible=False),  # kb_accordion
+        gr.Dropdown(choices=[]),  # history_dropdown
+        gr.Accordion(visible=False),  # kb_accordion
     )
 
 
@@ -252,11 +251,11 @@ def refresh_dropdown(user_state):
                     choices.append((display_text, s["session_id"]))
         except Exception:
             pass
-    return gr.update(choices=choices)
+    return gr.Dropdown(choices=choices)
 
 
 def load_session(session_id, user_state):
-    hide_btn = gr.update(visible=False)
+    hide_btn = gr.Button(visible=False)
     if not session_id or not user_state:
         return [], session_id, hide_btn, hide_btn, hide_btn, hide_btn
     try:
@@ -342,6 +341,12 @@ body, .gradio-container {
     background: #fafafa !important;
     color: #171717 !important;
 }
+
+/* Hide Gradio default footer (Use via API · Built with Gradio · Settings) */
+footer, .gradio-container > footer,
+div.footer, .built-with, .show-api,
+[class*="footer"], [class*="Footer"],
+.gradio-container .wrap > .show-api { display: none !important; visibility: hidden !important; height: 0 !important; overflow: hidden !important; }
 
 .sidebar {
     background: #ffffff !important;
@@ -506,14 +511,18 @@ def add_user_message(message, history, session_id, user_state):
     This runs instantly before the API call, so the user sees their
     message on the right side without delay. Gradio's built-in loading
     spinner handles the waiting indicator.
+    
+    IMPORTANT: This function must NOT output to fu1/fu2/fu3/sug_row.
+    In Gradio 6.14, if step1 and step2 both write to the same components
+    in a .then() chain, the second write gets silently dropped.
     """
     if not user_state or not user_state.get("authenticated"):
         history = list(history or [])
         history.append({"role": "assistant", "content": "⚠️ Please login to use the bot."})
-        return history, session_id, "", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+        return history, session_id, ""
 
     if not message or not message.strip():
-        return history or [], session_id, "", gr.skip(), gr.skip(), gr.skip(), gr.skip()
+        return history or [], session_id, ""
 
     if not session_id:
         session_id = new_session_id()
@@ -521,15 +530,7 @@ def add_user_message(message, history, session_id, user_state):
     history = list(history or [])
     history.append({"role": "user", "content": message})
 
-    return (
-        history,
-        session_id,
-        "",  # clear msg box
-        gr.update(visible=False),  # fu1
-        gr.update(visible=False),  # fu2
-        gr.update(visible=False),  # fu3
-        gr.update(visible=False),  # sug_row
-    )
+    return history, session_id, ""  # clear msg box
 
 
 def get_response(history, session_id, top_k, user_state):
@@ -592,21 +593,21 @@ def get_response(history, session_id, top_k, user_state):
         fu_updates = []
         for i in range(3):
             if i < len(fups):
-                fu_updates.append(gr.update(value=fups[i], visible=True))
+                fu_updates.append(gr.Button(value=fups[i], visible=True, size="sm"))
             else:
-                fu_updates.append(gr.update(visible=False))
+                fu_updates.append(gr.Button(visible=False))
 
-        return (history, session_id, *fu_updates, gr.update(visible=False))
+        return (history, session_id, *fu_updates, gr.Row(visible=False))
 
     except Exception as exc:
         history.append({"role": "assistant", "content": f"⚠️ {exc}"})
         return (
             history,
             session_id,
-            gr.update(visible=False),
-            gr.update(visible=False),
-            gr.update(visible=False),
-            gr.update(visible=False),
+            gr.Button(visible=False),
+            gr.Button(visible=False),
+            gr.Button(visible=False),
+            gr.Row(visible=False),
         )
 
 
@@ -623,10 +624,10 @@ def on_clear():
     return (
         [],  # chatbot
         "",  # session_state
-        gr.update(visible=False),  # fu1
-        gr.update(visible=False),  # fu2
-        gr.update(visible=False),  # fu3
-        gr.update(visible=True),  # suggestions
+        gr.Button(value="", visible=False),  # fu1
+        gr.Button(value="", visible=False),  # fu2
+        gr.Button(value="", visible=False),  # fu3
+        gr.Row(visible=True),  # suggestions
         "",  # msg
     )
 
@@ -741,11 +742,11 @@ def build():
                 logout = gr.Button("Logout", scale=1, min_width=70)
 
         # ── Wiring ──
-        # Step 1 outputs: chatbot, session_state, msg, fu1, fu2, fu3, sug_row
-        step1_outs = [chatbot, session_state, msg, fu1, fu2, fu3, sug_row]
+        # Step 1: only updates chatbot, session_state, msg (NO fu buttons)
+        step1_outs = [chatbot, session_state, msg]
         step1_ins = [msg, chatbot, session_state, user_state]
 
-        # Step 2 outputs: chatbot, session_state, fu1, fu2, fu3, sug_row
+        # Step 2: updates chatbot, session_state AND exclusively owns fu1, fu2, fu3, sug_row
         step2_outs = [chatbot, session_state, fu1, fu2, fu3, sug_row]
         step2_ins = [chatbot, session_state, top_k, user_state]
 
@@ -775,7 +776,7 @@ def build():
             )
 
         su_btn.click(signup_user, [su_name, su_email, su_password, su_role], [su_status]).then(
-            lambda r: gr.update(visible=True) if "successful" in r else gr.update(visible=False),
+            lambda r: gr.Column(visible=True) if "successful" in r else gr.Column(visible=False),
             [su_status],
             [verify_col],
         )
@@ -837,12 +838,12 @@ def build():
             return (
                 [],
                 "",
-                gr.update(value="", visible=False),
-                gr.update(value="", visible=False),
-                gr.update(value="", visible=False),
-                gr.update(visible=True),
+                gr.Button(value="", visible=False),
+                gr.Button(value="", visible=False),
+                gr.Button(value="", visible=False),
+                gr.Row(visible=True),
                 "",
-                gr.update(value=None, choices=choices),
+                gr.Dropdown(value=None, choices=choices),
             )
 
         clear.click(
