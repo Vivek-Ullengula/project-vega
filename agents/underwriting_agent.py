@@ -55,16 +55,15 @@ class SafeBedrockModel(BedrockModel):
                 cleaned.append(msg)
         return cleaned
 
-    def _format_request(  # type: ignore[override]
+    def format_request(  # type: ignore[override]
         self,
         messages: Any,
         tool_specs: Any = None,
-        system_prompt_content: Any = None,
-        tool_choice: Any = None,
+        system_prompt: Any = None,
     ) -> dict[str, Any]:
         """Override to strip reasoning blocks before formatting the request."""
         clean_messages = self._strip_reasoning(messages)
-        return super()._format_request(clean_messages, tool_specs, system_prompt_content, tool_choice)
+        return super().format_request(clean_messages, tool_specs, system_prompt)
 
 
 def _normalize_question(text: str) -> str:
