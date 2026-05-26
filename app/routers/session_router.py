@@ -32,7 +32,7 @@ async def list_sessions(identity: IdentityContext = Depends(get_identity_context
             "session_id": s["session_id"],
             "title": s.get("title", "New Chat"),
             "last_accessed": s.get("last_accessed", ""),
-            "message_count": len(s.get("messages", [])),
+            "message_count": len(s.get("messages") or []),
         }
         for s in sessions
     ]
@@ -54,7 +54,7 @@ async def get_session(
     return {
         "session_id": session["session_id"],
         "title": session.get("title", "New Chat"),
-        "messages": session.get("messages", []),
+        "messages": session.get("messages") or [],
         "last_accessed": session.get("last_accessed", ""),
     }
 

@@ -26,21 +26,26 @@ class AuthorizationService:
     ) -> None:
         """Check that the identity is authorized to invoke this agent.
 
-        In the first release, authorization is permissive — any authenticated
-        user can invoke an agent. Tool permissions are checked per-tool by
-        the ToolGateway.
+        The first release only exposes read tools, but role restrictions still
+        need to be enforced before the agent can invoke those tools.
         """
         if not identity.user_id:
             raise HTTPException(status_code=401, detail="Missing identity context")
 
         # Check tool-level role restrictions (if any)
         for perm in profile.tool_permissions:
-            if perm.allowed_roles and not any(r in perm.allowed_roles for r in identity.roles):
+            allowed_roles = {role.lower() for role in perm.allowed_roles}
+            user_roles = {role.lower() for role in (identity.roles or ["agent"])}
+            if allowed_roles and not user_roles.intersection(allowed_roles):
                 logger.warning(
                     "tool_access_denied",
                     tool_id=perm.tool_id,
                     user_roles=identity.roles,
                     required_roles=perm.allowed_roles,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Role is not allowed to use required tool: {perm.tool_id}",
                 )
 
         logger.info(

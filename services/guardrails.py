@@ -14,6 +14,18 @@ from domain.models import (
 logger = structlog.get_logger(__name__)
 
 
+class GuardrailBlockedError(Exception):
+    """Raised when a configured Bedrock Guardrail blocks a request or response."""
+
+    def __init__(self, source: str):
+        self.source = source
+        super().__init__(
+            "This request was blocked by the configured safety policy."
+            if source == "input"
+            else "The response was blocked by the configured safety policy."
+        )
+
+
 class GuardrailService:
     """Amazon Bedrock Guardrails integration.
 
@@ -46,8 +58,10 @@ class GuardrailService:
             action = response.get("action", "NONE")
             if action == "GUARDRAIL_INTERVENED":
                 logger.warning("guardrail_input_blocked", agent_id=request.agent_id)
-                # In first release, log but do not block
+                raise GuardrailBlockedError("input")
         except Exception as e:
+            if isinstance(e, GuardrailBlockedError):
+                raise
             logger.error("guardrail_input_check_failed", error=str(e))
 
     async def check_output(
@@ -71,5 +85,8 @@ class GuardrailService:
             action = result.get("action", "NONE")
             if action == "GUARDRAIL_INTERVENED":
                 logger.warning("guardrail_output_blocked", agent_id=profile.agent_id)
+                raise GuardrailBlockedError("output")
         except Exception as e:
+            if isinstance(e, GuardrailBlockedError):
+                raise
             logger.error("guardrail_output_check_failed", error=str(e))

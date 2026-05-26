@@ -45,7 +45,7 @@ class SyncKBRequest(BaseModel):
 @router.post("")
 async def create_knowledge_base(
     req: CreateKBRequest,
-    identity: IdentityContext = Depends(require_role("admin")),
+    identity: IdentityContext = Depends(require_role("admin", "underwriter")),
 ):
     """Create a new Bedrock Knowledge Base with an S3 data source.
 
@@ -174,7 +174,7 @@ async def get_knowledge_base(
 async def sync_knowledge_base(
     kb_id: str,
     req: SyncKBRequest = SyncKBRequest(),
-    identity: IdentityContext = Depends(require_role("admin")),
+    identity: IdentityContext = Depends(require_role("admin", "underwriter")),
 ):
     """Trigger a re-sync (re-ingestion) of a Knowledge Base's data source."""
     if not _kb_manager or not _dynamodb:
@@ -205,7 +205,7 @@ async def sync_knowledge_base(
 @router.delete("/{kb_id}")
 async def delete_knowledge_base(
     kb_id: str,
-    identity: IdentityContext = Depends(require_role("admin")),
+    identity: IdentityContext = Depends(require_role("admin", "underwriter")),
 ):
     """Delete a Knowledge Base from Bedrock and remove its metadata."""
     if not _kb_manager or not _dynamodb:

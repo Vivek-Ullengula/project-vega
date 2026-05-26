@@ -23,7 +23,7 @@ from domain.models import (
     IdentityContext,
 )
 from services.authorization import AuthorizationService
-from services.guardrails import GuardrailService
+from services.guardrails import GuardrailBlockedError, GuardrailService
 from services.telemetry import CloudWatchTelemetryEmitter
 from services.audit import MetadataOnlyAuditLogger
 
@@ -103,11 +103,19 @@ class RuntimeOrchestrator:
 
             return response
 
+        except GuardrailBlockedError as e:
+            logger.warning("orchestrator_guardrail_blocked", source=e.source)
+            return AgentInvocationResponse(
+                status="blocked",
+                answer=str(e),
+                session_id=session_id,
+                correlation_id=correlation_id,
+            )
         except Exception as e:
             logger.error("orchestrator_execute_failed", error=str(e))
             return AgentInvocationResponse(
                 status="error",
-                answer=f"An error occurred: {str(e)}",
+                answer="Sorry, I couldn't complete that request. Please try again or contact support if it continues.",
                 session_id=session_id,
                 correlation_id=correlation_id,
             )

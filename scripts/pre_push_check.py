@@ -9,18 +9,26 @@ Usage:
 """
 
 import argparse
+import os
 import subprocess
 import sys
-from typing import List, Tuple
+from typing import List
 
 
-def run_command(cmd: List[str], description: str, can_fail: bool = False) -> bool:
+def run_command(cmd: List[str], description: str, cwd: str | None = None) -> bool:
     """Execute a subprocess command and print readable status output."""
     print(f"\n[Running] {description}...")
     print(f"  Command: {' '.join(cmd)}")
+    if cwd:
+        print(f"  Working directory: {cwd}")
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd,
         )
         if result.returncode == 0:
             print(f"  [SUCCESS] {description} passed cleanly.")
@@ -42,6 +50,11 @@ def run_command(cmd: List[str], description: str, can_fail: bool = False) -> boo
         return False
 
 
+def npm_executable() -> str:
+    """Return the npm executable name for the current OS."""
+    return "npm.cmd" if os.name == "nt" else "npm"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run complete CI pre-push verifications locally.")
     parser.add_argument(
@@ -55,7 +68,7 @@ def main() -> None:
     print("      Project Vega: Pre-Push CI Verification Suite        ")
     print("============================================================")
 
-    steps: List[Tuple[List[str], str]] = []
+    steps: list[tuple[List[str], str, str | None]] = []
 
     if args.fix:
         print("\nMode: AUTO-FIX enabled. Modifying files in-place to adhere to standard layouts.")
@@ -63,12 +76,14 @@ def main() -> None:
             (
                 [sys.executable, "-m", "ruff", "check", "--fix", "--exclude", "vega_ref", "."],
                 "Ruff Auto-Fix Linter",
+                None,
             )
         )
         steps.append(
             (
                 [sys.executable, "-m", "ruff", "format", "--exclude", "vega_ref", "."],
                 "Ruff Code Formatter",
+                None,
             )
         )
     else:
@@ -77,21 +92,32 @@ def main() -> None:
             (
                 [sys.executable, "-m", "ruff", "check", "--exclude", "vega_ref", "."],
                 "Ruff Linter Check",
+                None,
             )
         )
         steps.append(
             (
                 [sys.executable, "-m", "ruff", "format", "--check", "--exclude", "vega_ref", "."],
                 "Ruff Format Conformance Check",
+                None,
             )
         )
 
     # Always append the pytest regression framework suite
-    steps.append(([sys.executable, "-m", "pytest"], "Pytest Unit Regression Suite"))
+    steps.append(([sys.executable, "-m", "pytest"], "Pytest Unit Regression Suite", None))
+
+    frontend_dir = "frontend"
+    if os.path.exists(os.path.join(frontend_dir, "package.json")):
+        npm = npm_executable()
+        steps.append(([npm, "run", "lint"], "Frontend ESLint Check", frontend_dir))
+        steps.append(([npm, "run", "typecheck"], "Frontend TypeScript Check", frontend_dir))
 
     success = True
-    for cmd, desc in steps:
-        step_passed = run_command(cmd, desc)
+    for step in steps:
+        cmd = step[0]
+        desc = step[1]
+        cwd = step[2] if len(step) > 2 else None
+        step_passed = run_command(cmd, desc, cwd=cwd)
         if not step_passed:
             success = False
 

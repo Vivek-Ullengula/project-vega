@@ -1,3 +1,5 @@
+import type { SourceCitation } from './chat'
+
 export interface SessionSummary {
   session_id: string
   title: string
@@ -9,6 +11,7 @@ export interface SessionSummary {
 export interface StoredSessionMessage {
   role: string
   content: string
+  citations?: SourceCitation[]
 }
 
 export interface SessionDetail {

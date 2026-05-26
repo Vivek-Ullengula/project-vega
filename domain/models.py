@@ -17,6 +17,7 @@ class AgentInvocationRequest(BaseModel):
     agent_id: str
     input_text: str
     session_id: str | None = None
+    top_k: int = Field(default=5, ge=1, le=20)
     channel: str = "api"
     request_metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -40,6 +41,7 @@ class SourceCitation(BaseModel):
     title: str | None = None
     uri: str | None = None
     manual_name: str | None = None
+    class_code: str | None = None
     chunk_id: str | None = None
     score: float | None = None
 

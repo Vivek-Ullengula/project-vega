@@ -15,11 +15,16 @@ class Settings(BaseSettings):
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
 
+    # Cognito / DynamoDB
+    cognito_user_pool_id: str | None = None
+    cognito_app_client_id: str | None = None
+    dynamodb_table_name: str = "CoactionPlatform"
+
     # Model provider: 'openai' or 'bedrock'
-    model_provider: str = "bedrock"
+    model_provider: str = "openai"
 
     # Bedrock
-    bedrock_model_id: str = "amazon.nova-pro-v1:0"
+    bedrock_model_id: str = "gpt-5.2"
     bedrock_kb_id: str | None = None
 
     # S3
@@ -27,7 +32,7 @@ class Settings(BaseSettings):
 
     # OpenAI (used by Strands agent)
     openai_api_key: str = ""
-    openai_chat_model: str = "gpt-4o"
+    openai_chat_model: str = "gpt-5.2"
 
     # Aurora PostgreSQL
     db_host: str | None = None
@@ -40,6 +45,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     jwt_secret_key: str | None = None
     jwt_access_token_exp_minutes: int = 60
+    cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     # AgentCore Memory
     agentcore_memory_enabled: bool = False

@@ -8,6 +8,8 @@ import type { StoredSessionMessage } from '../../types/session'
 
 import { useGetSessionQuery } from '../../store/api/sessionApi'
 
+import { uuid } from '../../lib/uuid'
+
 import { ChatPanel } from './ChatPanel'
 
 import { SessionSidebar } from './SessionSidebar'
@@ -16,23 +18,27 @@ import { SessionSidebar } from './SessionSidebar'
 
 function messageId(): string {
 
-  return crypto.randomUUID()
+  return uuid()
 
 }
 
 
 
-function mapStoredToChatMessages(stored: StoredSessionMessage[]): ChatMessageType[] {
+function mapStoredToChatMessages(stored: StoredSessionMessage[] | null | undefined): ChatMessageType[] {
 
   const out: ChatMessageType[] = []
 
+  if (!stored || !Array.isArray(stored)) return out
+
   for (const m of stored) {
+
+    if (!m) continue
 
     const role = m.role === 'user' || m.role === 'assistant' ? m.role : null
 
     if (!role || typeof m.content !== 'string') continue
 
-    out.push({ id: messageId(), role, content: m.content })
+    out.push({ id: messageId(), role, content: m.content, citations: m.citations ?? [] })
 
   }
 
@@ -136,6 +142,14 @@ export function ChatWorkspace() {
 
   useEffect(() => {
 
+    let cancelled = false
+
+    const updateState = (fn: () => void) => {
+      queueMicrotask(() => {
+        if (!cancelled) fn()
+      })
+    }
+
     if (sessionId) {
 
       if (sessionId === locallyGeneratedSessionIdRef.current) {
@@ -144,22 +158,26 @@ export function ChatWorkspace() {
 
       } else {
 
-        setSkipServerSync(false)
-
-        locallyGeneratedSessionIdRef.current = null
+        updateState(() => {
+          setSkipServerSync(false)
+          locallyGeneratedSessionIdRef.current = null
+        })
 
       }
 
     } else {
 
-      setMessages([])
+      updateState(() => {
+        setMessages([])
+        setFollowUps([])
+        setSkipServerSync(false)
+        locallyGeneratedSessionIdRef.current = null
+      })
 
-      setFollowUps([])
+    }
 
-      setSkipServerSync(false)
-
-      locallyGeneratedSessionIdRef.current = null
-
+    return () => {
+      cancelled = true
     }
 
   }, [sessionId])
@@ -170,9 +188,18 @@ export function ChatWorkspace() {
 
     if (!sessionId || skipServerSync || !sessionDetail) return
 
-    setMessages(mapStoredToChatMessages(sessionDetail.messages))
+    let cancelled = false
+    const nextMessages = mapStoredToChatMessages(sessionDetail.messages)
 
-    setFollowUps([])
+    queueMicrotask(() => {
+      if (cancelled) return
+      setMessages(nextMessages)
+      setFollowUps([])
+    })
+
+    return () => {
+      cancelled = true
+    }
 
   }, [sessionId, sessionDetail, skipServerSync])
 

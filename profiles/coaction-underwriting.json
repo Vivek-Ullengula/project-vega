@@ -5,8 +5,8 @@
   "prompt_template_id": "underwriting_system_v1",
   "model_profile": {
     "provider": "bedrock",
-    "model_id": "amazon.nova-pro-v1:0",
-    "temperature": 0.0,
+    "model_id": "gpt-5.2",
+    "temperature": 0.6,
     "max_tokens": 2048
   },
   "retrieval_profile": {

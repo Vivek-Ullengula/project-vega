@@ -48,6 +48,9 @@ class LoginResponse(BaseModel):
     user: dict
 
 
+PUBLIC_SIGNUP_ROLE = "agent"
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────
 
 
@@ -57,17 +60,20 @@ async def signup(req: SignupRequest):
     if not _cognito:
         raise HTTPException(status_code=503, detail="Auth service not initialized")
 
-    valid_roles = {"agent", "underwriter", "external"}
-    role = req.role.strip().lower()
-    if role not in valid_roles:
-        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {valid_roles}")
+    requested_role = req.role.strip().lower()
+    if requested_role != PUBLIC_SIGNUP_ROLE:
+        logger.info(
+            "public_signup_role_downgraded",
+            requested_role=requested_role,
+            assigned_role=PUBLIC_SIGNUP_ROLE,
+        )
 
     try:
         result = _cognito.sign_up(
             email=req.email.strip(),
             password=req.password,
             name=req.name.strip(),
-            role=role,
+            role=PUBLIC_SIGNUP_ROLE,
         )
         return {
             "message": "Signup successful. Please check your email for a verification code.",

@@ -22,7 +22,7 @@ for _k, _v in list(os.environ.items()):
 
 import structlog
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 # Domain Models
@@ -37,7 +37,7 @@ from adapters.aws.bedrock_kb_manager import BedrockKBManager
 from services.agent_service import AgentService
 
 # Identity
-from app.dependencies.identity import init_jwt_verifier
+from app.dependencies.identity import get_identity_context, init_jwt_verifier
 
 # Middleware
 from app.middleware.correlation import CorrelationIdMiddleware
@@ -124,7 +124,7 @@ async def lifespan(app: FastAPI):
     logger.info("app_shutting_down")
 
 
-async def _handle_agentcore_invoke(request: Request) -> dict:
+async def _handle_agentcore_invoke(request: Request, identity: IdentityContext) -> dict:
     """Shared handler for AgentCore invocation paths (POST / and POST /invocations)."""
     payload = await request.json()
     input_text = payload.get("input_text") or payload.get("prompt")
@@ -132,15 +132,10 @@ async def _handle_agentcore_invoke(request: Request) -> dict:
         return {"status": "error", "answer": "Missing 'input_text' or 'prompt' in payload."}
 
     invocation = AgentInvocationRequest(
-        agent_id="coaction-underwriting",
+        agent_id=payload.get("agent_id", "coaction-underwriting"),
         input_text=input_text,
         session_id=payload.get("session_id"),
-    )
-    identity = IdentityContext(
-        user_id="agentcore-system",
-        roles=["agent"],
-        channel="agentcore",
-        correlation_id=getattr(request.state, "correlation_id", "agentcore-invoke"),
+        top_k=payload.get("top_k", 5),
     )
 
     service = request.app.state.agent_service
@@ -163,10 +158,15 @@ def create_app() -> FastAPI:
     # ── Middleware (HLD §12) ──
     app.add_middleware(ErrorHandlerMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
+    cors_origin_raw = _env(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    )
+    cors_origins = [origin.strip() for origin in cors_origin_raw.split(",") if origin.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=cors_origins,
+        allow_credentials="*" not in cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -180,14 +180,20 @@ def create_app() -> FastAPI:
 
     # ── AgentCore Invocation Paths ──
     @app.post("/invocations")
-    async def invocations_root(request: Request):
+    async def invocations_root(
+        request: Request,
+        identity: IdentityContext = Depends(get_identity_context),
+    ):
         """Standard AgentCore invocation path."""
-        return await _handle_agentcore_invoke(request)
+        return await _handle_agentcore_invoke(request, identity)
 
     @app.post("/")
-    async def root_invoke(request: Request):
+    async def root_invoke(
+        request: Request,
+        identity: IdentityContext = Depends(get_identity_context),
+    ):
         """Root handler for direct Bedrock AgentCore invocations."""
-        return await _handle_agentcore_invoke(request)
+        return await _handle_agentcore_invoke(request, identity)
 
     # ── Mount Gradio UI ──
     try:
@@ -226,6 +232,13 @@ def create_app() -> FastAPI:
                 from fastapi import HTTPException
 
                 raise HTTPException(status_code=404, detail="Not Found")
+
+            # Serve static files (e.g. coaction.png, favicon.svg, icons.svg)
+            # that Vite copies from public/ to the dist root
+            static_file = os.path.join(frontend_dist, fallback_path)
+            if fallback_path and os.path.isfile(static_file):
+                return FileResponse(static_file)
+
             return FileResponse(os.path.join(frontend_dist, "index.html"))
 
         logger.info("react_frontend_mounted", path=frontend_dist)
@@ -235,5 +248,3 @@ def create_app() -> FastAPI:
 
 # Create the app instance
 app = create_app()
-
-# Trigger live reload for dynamic model selection routing

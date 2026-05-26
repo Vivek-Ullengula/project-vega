@@ -38,11 +38,21 @@ dependencies = [
     "pytest-asyncio>=0.24.0",
 ]
 
-[tool.setuptools]
-packages = ["coaction_agent_platform"]
+[tool.setuptools.packages.find]
+include = [
+    "adapters*",
+    "agents*",
+    "app*",
+    "control_plane*",
+    "domain*",
+    "entrypoints*",
+    "runtime*",
+    "services*",
+    "scripts*",
+]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "coaction_agent_platform/tests"]
+testpaths = ["tests"]
 python_files = "test_*.py"
 pythonpath = ["."]
 

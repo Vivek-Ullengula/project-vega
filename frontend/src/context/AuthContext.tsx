@@ -1,13 +1,12 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from 'react'
 import { useDispatch } from 'react-redux'
+import { AuthContext } from './auth-context'
 import { getRtkErrorMessage } from '../lib/apiError'
 import {
   AUTH_SESSION_EXPIRED_EVENT,
@@ -22,15 +21,6 @@ import {
   welcomeMessage,
   type SessionUser,
 } from '../types/auth'
-
-interface AuthContextValue {
-  user: SessionUser
-  welcome: string
-  login: (email: string, password: string) => Promise<string>
-  logout: () => void
-}
-
-const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const dispatch = useDispatch<AppDispatch>()
@@ -92,12 +82,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
-}
-
-export function useAuth(): AuthContextValue {
-  const ctx = useContext(AuthContext)
-  if (!ctx) {
-    throw new Error('useAuth must be used within AuthProvider')
-  }
-  return ctx
 }

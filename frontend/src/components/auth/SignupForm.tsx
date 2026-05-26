@@ -38,7 +38,7 @@ export function SignupForm() {
         name: name.trim(),
         email: email.trim(),
         password,
-        role: 'underwriter',
+        role: 'agent',
       }).unwrap()
       setStatus(
         'Signup successful. Check your email for a verification code, then verify below.',

@@ -2,13 +2,15 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateA
 import { ChatMessage, CoactionAssistantAvatar } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import { getRtkErrorMessage } from '../../lib/apiError'
-import { buildAssistantContent, newSessionId } from '../../lib/chat'
+import { buildAssistantContent, newSessionId, streamAgentResponse } from '../../lib/chat'
 import { btnSecondaryClass } from '../../lib/styles'
-import { useInvokeAgentMutation } from '../../store/api/agentApi'
+import { uuid } from '../../lib/uuid'
+import { baseApi } from '../../store/api/baseApi'
+import { useAppDispatch } from '../../store/hooks'
 import type { ChatMessage as ChatMessageType } from '../../types/chat'
 
 function messageId(): string {
-  return crypto.randomUUID()
+  return uuid()
 }
 
 const EMPTY_PLACEHOLDER = (
@@ -21,6 +23,26 @@ const EMPTY_PLACEHOLDER = (
     </p>
   </div>
 )
+
+function LoadingDots() {
+  return (
+    <div className="flex justify-start gap-2">
+      <CoactionAssistantAvatar />
+      <div
+        className="flex items-center rounded-lg border border-[#E5E5E5] bg-[#F9F9F9] px-4 py-3"
+        role="status"
+        aria-live="polite"
+        aria-label="Generating response"
+      >
+        <span className="flex items-center gap-1" aria-hidden="true">
+          <span className="size-1.5 animate-bounce rounded-full bg-[#6B7280] [animation-delay:-0.2s]" />
+          <span className="size-1.5 animate-bounce rounded-full bg-[#6B7280] [animation-delay:-0.1s]" />
+          <span className="size-1.5 animate-bounce rounded-full bg-[#6B7280]" />
+        </span>
+      </div>
+    </div>
+  )
+}
 
 export type ChatPanelProps = {
   sessionId: string
@@ -41,10 +63,9 @@ export function ChatPanel({
   setFollowUps,
   onNewChat,
 }: ChatPanelProps) {
-  const [invokeAgent, { isLoading }] = useInvokeAgentMutation()
+  const dispatch = useAppDispatch()
+  const [isLoading, setIsLoading] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
-
-  const [selectedModel, setSelectedModel] = useState('amazon.nova-pro-v1:0')
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -62,58 +83,85 @@ export function ChatPanel({
       }
       setMessages((prev) => [...prev, userMsg])
       setFollowUps([])
+      setIsLoading(true)
+
+      const assistantId = messageId()
+      let assistantStarted = false
 
       try {
-        const data = await invokeAgent({
-          body: {
+        await streamAgentResponse(
+          {
             input_text: text,
             session_id: activeSession,
             top_k: 5,
-            model_id: selectedModel,
           },
-        }).unwrap()
+          {
+            onSession: (streamSessionId) => {
+              if (streamSessionId) setSessionId(streamSessionId)
+            },
+            onDelta: (delta) => {
+              if (!assistantStarted) {
+                assistantStarted = true
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    id: assistantId,
+                    role: 'assistant',
+                    content: delta,
+                    citations: [],
+                  },
+                ])
+                return
+              }
 
-        if (data.session_id) setSessionId(data.session_id)
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantId ? { ...msg, content: `${msg.content}${delta}` } : msg,
+                ),
+              )
+            },
+            onFinal: (data) => {
+              if (data.session_id) setSessionId(data.session_id)
 
-        const assistantMsg: ChatMessageType = {
-          id: messageId(),
-          role: 'assistant',
-          content: buildAssistantContent(data),
-        }
-        setMessages((prev) => [...prev, assistantMsg])
-        setFollowUps(data.metadata?.follow_up_questions?.filter(Boolean) ?? [])
+              const assistantMsg: ChatMessageType = {
+                id: assistantId,
+                role: 'assistant',
+                content: buildAssistantContent(data),
+                citations: data.citations ?? [],
+              }
+
+              setMessages((prev) => {
+                if (assistantStarted) {
+                  return prev.map((msg) => (msg.id === assistantId ? assistantMsg : msg))
+                }
+                assistantStarted = true
+                return [...prev, assistantMsg]
+              })
+              setFollowUps(data.metadata?.follow_up_questions?.filter(Boolean) ?? [])
+              dispatch(baseApi.util.invalidateTags([{ type: 'Session', id: 'LIST' }]))
+            },
+          },
+        )
       } catch (error) {
         const assistantMsg: ChatMessageType = {
           id: messageId(),
           role: 'assistant',
-          content: `⚠️ ${getRtkErrorMessage(error)}`,
+          content: `Warning: ${getRtkErrorMessage(error)}`,
         }
         setMessages((prev) => [...prev, assistantMsg])
+      } finally {
+        setIsLoading(false)
       }
     },
-    [invokeAgent, sessionId, setSessionId, setMessages, setFollowUps, selectedModel],
+    [dispatch, sessionId, setSessionId, setMessages, setFollowUps],
   )
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-neutral-50">
-      {/* Model Selection Header */}
-      <div className="flex shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-4 py-2.5 shadow-sm">
-        <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Underwriting Assistant</span>
-        <div className="flex items-center gap-2">
-          <label htmlFor="model-select" className="text-xs text-neutral-600 font-medium">Model:</label>
-          <select
-            id="model-select"
-            className="rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 shadow-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500"
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-          >
-            <option value="amazon.nova-pro-v1:0">Amazon Nova Pro</option>
-            <option value="amazon.nova-lite-v1:0">Amazon Nova Lite</option>
-            <option value="us.anthropic.claude-3-5-sonnet-20241022-v2:0">Claude 3.5 Sonnet</option>
-            <option value="gpt-4o">GPT-4o (OpenAI)</option>
-            <option value="gpt-4o-mini">GPT-4o-mini (OpenAI)</option>
-          </select>
-        </div>
+      <div className="flex shrink-0 items-center border-b border-neutral-200 bg-white px-4 py-2.5 shadow-sm">
+        <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+          Underwriting Assistant
+        </span>
       </div>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="flex flex-col gap-4">
@@ -124,23 +172,7 @@ export function ChatPanel({
               {messages.map((msg) => (
                 <ChatMessage key={msg.id} message={msg} />
               ))}
-              {isLoading ? (
-                <div className="flex justify-start gap-2">
-                  <CoactionAssistantAvatar />
-                  <div
-                    className="flex items-center gap-2 rounded-lg border border-[#E5E5E5] bg-[#F9F9F9] px-4 py-3 text-sm text-[#6B7280]"
-                    role="status"
-                    aria-live="polite"
-                  >
-                    <span>Thinking</span>
-                    <span className="flex items-center gap-1" aria-hidden="true">
-                      <span className="size-1.5 animate-bounce rounded-full bg-[#6B7280] [animation-delay:-0.2s]" />
-                      <span className="size-1.5 animate-bounce rounded-full bg-[#6B7280] [animation-delay:-0.1s]" />
-                      <span className="size-1.5 animate-bounce rounded-full bg-[#6B7280]" />
-                    </span>
-                  </div>
-                </div>
-              ) : null}
+              {isLoading ? <LoadingDots /> : null}
             </>
           )}
         </div>

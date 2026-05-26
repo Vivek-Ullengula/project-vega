@@ -4,6 +4,7 @@ export interface ChatMessage {
   id: string
   role: ChatRole
   content: string
+  citations?: SourceCitation[]
 }
 
 export interface SourceCitation {
@@ -11,6 +12,7 @@ export interface SourceCitation {
   title?: string | null
   uri?: string | null
   manual_name?: string | null
+  class_code?: string | null
   chunk_id?: string | null
   score?: number | null
 }
@@ -19,7 +21,6 @@ export interface AgentInvokeRequest {
   input_text: string
   session_id?: string | null
   top_k?: number
-  model_id?: string | null
 }
 
 export interface AgentInvokeResponse {

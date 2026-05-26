@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { ChatWorkspace } from '../components/chat/ChatWorkspace'
 
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../context/useAuth'
 
 import { btnSecondaryClass } from '../lib/styles'
 

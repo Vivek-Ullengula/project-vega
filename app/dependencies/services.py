@@ -26,12 +26,7 @@ def get_boto3_factory() -> Boto3SessionFactory:
 @lru_cache()
 def get_dynamodb_adapter() -> DynamoDBAdapter:
     settings = get_settings()
-    table = (
-        settings.dynamodb_table_name
-        if hasattr(settings, "dynamodb_table_name")
-        else "CoactionPlatform"
-    )
-    return DynamoDBAdapter(table_name=table, region=settings.aws_region)
+    return DynamoDBAdapter(table_name=settings.dynamodb_table_name, region=settings.aws_region)
 
 
 @lru_cache()

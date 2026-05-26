@@ -1,9 +1,11 @@
 # coaction_agent_platform/app/routers/agent_router.py
 """Agent invocation endpoint."""
 
+import json
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from domain.models import (
     AgentInvocationRequest,
@@ -31,8 +33,7 @@ def init_agent_router(agent_service) -> None:
 class InvokeRequest(BaseModel):
     input_text: str
     session_id: str | None = None
-    top_k: int = 5
-    model_id: str | None = None
+    top_k: int = Field(default=5, ge=1, le=20)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────
@@ -56,11 +57,42 @@ async def invoke_agent(
         agent_id=agent_id,
         input_text=req.input_text,
         session_id=req.session_id,
-        request_metadata={"model_id": req.model_id} if req.model_id else {},
+        top_k=req.top_k,
     )
 
     response = await _agent_service.invoke(invocation, identity)
     return response
+
+
+@router.post("/{agent_id}/invoke/stream")
+async def stream_agent(
+    agent_id: str,
+    req: InvokeRequest,
+    identity: IdentityContext = Depends(get_identity_context),
+):
+    """Invoke an agent and stream visible answer deltas as server-sent events."""
+    if not _agent_service:
+        raise HTTPException(status_code=503, detail="Agent service not initialized")
+
+    invocation = AgentInvocationRequest(
+        agent_id=agent_id,
+        input_text=req.input_text,
+        session_id=req.session_id,
+        top_k=req.top_k,
+    )
+
+    async def event_stream():
+        async for event in _agent_service.stream_invoke(invocation, identity):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/{agent_id}/reload")
