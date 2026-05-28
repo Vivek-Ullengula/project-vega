@@ -42,6 +42,7 @@ OFF_TOPIC_RESPONSE = (
     "I can only answer binding authority and underwriting related questions. "
     "How can I help you with insurance today?"
 )
+LOB_CLARIFICATION_QUESTION = "Are you inquiring about Property or General Liability coverage?"
 INSURANCE_SCOPE_TERMS = {
     "insurance",
     "underwriting",
@@ -83,7 +84,103 @@ COVERAGE_AVAILABILITY_TERMS = (
     "inland marine pac",
     "outdoor property",
     "property in the open",
+    "solar panel",
+    "solar panels",
 )
+RETRIEVAL_MATCH_STOPWORDS = {
+    "about",
+    "and",
+    "are",
+    "coverage",
+    "define",
+    "details",
+    "does",
+    "explain",
+    "for",
+    "from",
+    "give",
+    "guide",
+    "info",
+    "information",
+    "is",
+    "manual",
+    "mean",
+    "me",
+    "of",
+    "on",
+    "overview",
+    "please",
+    "summary",
+    "summarize",
+    "tell",
+    "the",
+    "this",
+    "what",
+}
+PROPERTY_QUERY_SIGNALS = {
+    "bpp",
+    "business income",
+    "business personal property",
+    "cp ",
+    "property",
+    "tenant improvement",
+    "tenant improvements",
+    "tiv",
+}
+PROPERTY_QUERY_PATTERNS = (
+    r"\bbuilding\s+limits?\b",
+    r"\bbuilding\s+values?\b",
+    r"\bvalue\s+of\s+.+\bbuilding\s+limits?\b",
+    r"\bvalues?\s+in\s+the\s+building\s+limits?\b",
+    r"\battached\s+to\s+a\s+building\b",
+    r"\bAOP\s+deductible\b",
+    r"\bACV\b",
+    r"\bRCV\b",
+)
+GL_QUERY_SIGNALS = {
+    "cg ",
+    "class code",
+    "general liability",
+    "gl ",
+    "liability",
+}
+PROPERTY_TOPIC_PHRASES = {
+    "solar panel",
+    "solar panels",
+    "triple net lease",
+    "vacant building",
+    "vacant buildings",
+    "wildfire guide",
+}
+LOB_SELECTION_DIRECTIVE_TOKENS = {
+    "coverage",
+    "correct",
+    "for",
+    "from",
+    "general",
+    "gl",
+    "i",
+    "liability",
+    "line",
+    "manual",
+    "mean",
+    "meant",
+    "one",
+    "please",
+    "property",
+    "right",
+    "the",
+    "yeah",
+    "yep",
+    "yes",
+}
+AMBIGUOUS_LOB_TOPIC_PHRASES = {
+    "solar panel",
+    "solar panels",
+    "triple net lease",
+    "vacant building",
+    "vacant buildings",
+}
 
 
 class SafeBedrockModel(BedrockModel):
@@ -160,6 +257,42 @@ def _extract_followups_from_text(content: str) -> list[str]:
     return [m.strip() for m in matches if m.strip()]
 
 
+def _split_trailing_numbered_followups(answer: str) -> tuple[str, list[str]]:
+    """Strip model-emitted follow-up questions even when it forgot the header."""
+    lines = answer.rstrip().splitlines()
+    if not lines:
+        return answer, []
+
+    followups_reversed: list[str] = []
+    saw_numbered_question = False
+    idx = len(lines) - 1
+    while idx >= 0:
+        line = lines[idx].strip()
+        if not line:
+            idx -= 1
+            continue
+
+        numbered_match = re.match(r"^\d+\.\s*(.+\?)\s*$", line)
+        if numbered_match:
+            followups_reversed.append(numbered_match.group(1).strip())
+            saw_numbered_question = True
+            idx -= 1
+            continue
+
+        if saw_numbered_question and line.endswith("?"):
+            followups_reversed.append(line)
+            idx -= 1
+            continue
+
+        break
+
+    if not saw_numbered_question:
+        return answer, []
+
+    clean_answer = "\n".join(lines[: idx + 1]).strip()
+    return clean_answer, list(reversed(followups_reversed))[:3]
+
+
 def _has_insurance_scope_signal(text: str) -> bool:
     """Return whether the request appears related to the underwriting assistant domain."""
     normalized = f" {text.strip().lower()} "
@@ -194,6 +327,172 @@ def _retrieval_evidence_text(retrieval_sources: list[dict]) -> str:
             if value:
                 parts.append(str(value))
     return " ".join(parts).lower()
+
+
+def _normalize_match_text(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
+
+
+def _match_tokens(text: str) -> set[str]:
+    tokens = set()
+    for token in re.findall(r"[a-z0-9]+", text.lower()):
+        if len(token) < 3 or token in RETRIEVAL_MATCH_STOPWORDS:
+            continue
+        if token.endswith("s") and len(token) > 4:
+            token = token[:-1]
+        tokens.add(token)
+    return tokens
+
+
+def _query_mentions_line_of_business(query: str) -> bool:
+    query_lower = f" {query.lower()} "
+    if any(signal in query_lower for signal in PROPERTY_QUERY_SIGNALS | GL_QUERY_SIGNALS):
+        return True
+    return any(
+        re.search(pattern, query, flags=re.IGNORECASE) for pattern in PROPERTY_QUERY_PATTERNS
+    )
+
+
+def _query_matches_topic_phrases(query: str, phrases: set[str]) -> bool:
+    query_norm = _normalize_match_text(query)
+    query_tokens = _match_tokens(query)
+    for phrase in phrases:
+        phrase_norm = _normalize_match_text(phrase)
+        phrase_tokens = _match_tokens(phrase)
+        if phrase_norm in query_norm or phrase_tokens <= query_tokens:
+            return True
+    return False
+
+
+def _query_matches_known_property_topic(query: str) -> bool:
+    return _query_matches_topic_phrases(query, PROPERTY_TOPIC_PHRASES)
+
+
+def _query_matches_ambiguous_lob_topic(query: str) -> bool:
+    return _query_matches_topic_phrases(query, AMBIGUOUS_LOB_TOPIC_PHRASES)
+
+
+def _query_is_lob_selection_only(query: str) -> bool:
+    normalized = _normalize_match_text(query)
+    if not normalized:
+        return False
+    mentions_lob = bool(re.search(r"\b(property|gl|general liability|liability)\b", normalized))
+    if not mentions_lob:
+        return False
+    tokens = set(normalized.split())
+    return not (tokens - LOB_SELECTION_DIRECTIVE_TOKENS)
+
+
+def _selected_lob_from_query(query: str) -> str | None:
+    normalized = _normalize_match_text(query)
+    if re.search(r"\bproperty\b", normalized):
+        return "Property"
+    if re.search(r"\b(gl|general liability|liability)\b", normalized):
+        return "General Liability"
+    return None
+
+
+def _latest_user_topic(history: list[dict] | None) -> str | None:
+    if not history:
+        return None
+    for msg in reversed(history):
+        if not isinstance(msg, dict):
+            continue
+        if (msg.get("role") or "").strip().lower() != "user":
+            continue
+        content = str(msg.get("content") or "").strip()
+        if not content or _query_is_lob_selection_only(content):
+            continue
+        return content
+    return None
+
+
+def _retrieval_current_query(query: str, history: list[dict] | None) -> str:
+    """Carry the prior topic into short LOB-selection follow-ups."""
+    if not _query_is_lob_selection_only(query):
+        return query
+    selected_lob = _selected_lob_from_query(query)
+    prior_topic = _latest_user_topic(history)
+    if not selected_lob or not prior_topic:
+        return query
+    return f"{prior_topic} {selected_lob}"
+
+
+def _public_source_line_of_business(source: dict) -> str | None:
+    manual_name = (source.get("manual_name") or "").lower()
+    if "internal" in manual_name:
+        return None
+    if "property" in manual_name:
+        return "Property"
+    if "general liability" in manual_name or "guide" in manual_name:
+        return "General Liability"
+    return None
+
+
+def _source_evidence_text(source: dict) -> str:
+    return " ".join(
+        str(source.get(key) or "") for key in ("heading", "manual_name", "content_text", "snippet")
+    )
+
+
+def _source_matches_query_topic(source: dict, query: str) -> bool:
+    query_tokens = _match_tokens(query)
+    if len(query_tokens) < 2:
+        return False
+
+    evidence = _source_evidence_text(source)
+    evidence_tokens = _match_tokens(evidence)
+    if query_tokens <= evidence_tokens:
+        return True
+
+    query_norm = _normalize_match_text(query)
+    evidence_norm = _normalize_match_text(evidence)
+    important_words = [
+        word
+        for word in query_norm.split()
+        if len(word) >= 3 and word not in RETRIEVAL_MATCH_STOPWORDS
+    ]
+    for phrase_len in range(min(4, len(important_words)), 1, -1):
+        for idx in range(0, len(important_words) - phrase_len + 1):
+            phrase = " ".join(important_words[idx : idx + phrase_len])
+            if phrase in evidence_norm:
+                return True
+
+    return False
+
+
+def _requires_cross_manual_clarification(query: str, retrieval_sources: list[dict]) -> bool:
+    """Require clarification when the same topic appears in public GL and Property results."""
+    if _query_mentions_line_of_business(query):
+        return False
+
+    matched_lobs = set()
+    for source in retrieval_sources:
+        lob = _public_source_line_of_business(source)
+        if not lob:
+            continue
+        if _source_matches_query_topic(source, query):
+            matched_lobs.add(lob)
+
+    if "General Liability" in matched_lobs and _query_matches_known_property_topic(query):
+        return True
+
+    return {"Property", "General Liability"} <= matched_lobs
+
+
+def _static_clarification_response(query: str) -> dict | None:
+    """Clarify known cross-LOB topics before model streaming starts."""
+    if _query_mentions_line_of_business(query):
+        return None
+    if not _query_matches_ambiguous_lob_topic(query):
+        return None
+    logger.info("cross_manual_clarification_short_circuited", query=query)
+    return {
+        "answer": LOB_CLARIFICATION_QUESTION,
+        "citations": [],
+        "follow_up_questions": [],
+        "sources": [],
+    }
 
 
 def _asks_for_availability(query: str) -> bool:
@@ -390,8 +689,14 @@ def _normalize_underwriter_guidance(answer: str) -> str:
     if not re.search(r"\bCoaction underwriter\b", answer, flags=re.IGNORECASE):
         return answer
 
+    guidance_sentence_re = (
+        r"[^.!?\n]*\b("
+        r"contact|consult|ask|reach\s+out\s+to|talk\s+to|check\s+with|"
+        r"please\s+contact|for\s+authoritative\s+guidance"
+        r")\b[^.!?\n]*\bCoaction underwriter\b[^.!?\n]*(?:[.!?]|$)"
+    )
     normalized = re.sub(
-        r"[^.!?\n]*\bCoaction underwriter\b[^.!?\n]*(?:[.!?]|$)",
+        guidance_sentence_re,
         "",
         answer,
         flags=re.IGNORECASE,
@@ -454,7 +759,7 @@ def _build_public_source_maps(
 
         normalized = {**src, "url": url, "source_id": source_id}
         source_id_to_meta[source_id] = normalized
-        url_to_source_id[url] = source_id
+        url_to_source_id.setdefault(url, source_id)
 
     return source_id_to_meta, url_to_source_id, retrieved_internal_guidelines
 
@@ -528,6 +833,178 @@ def _conservative_citation_fallback(
     return [next(iter(source_id_to_meta))]
 
 
+def _citation_support_score(answer: str, query: str, source: dict) -> int:
+    evidence = _source_evidence_text(source)
+    answer_tokens = _match_tokens(answer)
+    query_tokens = _match_tokens(query)
+    evidence_tokens = _match_tokens(evidence)
+
+    score = len((answer_tokens | query_tokens) & evidence_tokens)
+    heading_tokens = _match_tokens(str(source.get("heading") or ""))
+    score += len(query_tokens & heading_tokens) * 3
+
+    answer_norm = _normalize_match_text(answer)
+    evidence_norm = _normalize_match_text(evidence)
+    heading_norm = _normalize_match_text(str(source.get("heading") or ""))
+    if heading_norm and heading_norm in answer_norm:
+        score += 8
+    for phrase in ("risk meter", "triple net lease", "solar panels", "spoilage coverage"):
+        if phrase in answer_norm and phrase in evidence_norm:
+            score += 5
+
+    return score
+
+
+def _retrieved_citation_fallback(
+    *,
+    answer: str,
+    query: str,
+    source_id_to_meta: dict[str, dict],
+) -> list[str]:
+    """Pick a citation from retrieved public sources when the model omits source IDs."""
+    conservative = _conservative_citation_fallback(answer, source_id_to_meta)
+    if conservative:
+        return conservative
+
+    scored_sources = []
+    for source_id, source in source_id_to_meta.items():
+        score = _citation_support_score(answer, query, source)
+        if score > 0:
+            scored_sources.append((score, source_id))
+
+    if not scored_sources:
+        return []
+
+    scored_sources.sort(reverse=True)
+    top_score, top_source_id = scored_sources[0]
+    second_score = scored_sources[1][0] if len(scored_sources) > 1 else 0
+    if top_score >= 4 and top_score >= second_score + 2:
+        return [top_source_id]
+    return []
+
+
+def _answer_looks_hollow(answer: str) -> bool:
+    """Detect answers that contain only a heading, empty markdown, or no facts."""
+    normalized = _normalize_match_text(answer)
+    tokens = _match_tokens(answer)
+    if not normalized or not tokens:
+        return True
+    if "** **" in answer and len(tokens) <= 5:
+        return True
+    if len(tokens) <= 3 and not re.search(r"[.!?]\s*$", answer.strip()):
+        return True
+    return False
+
+
+def _answer_is_retrieval_refusal(answer: str) -> bool:
+    normalized = answer.lower()
+    return bool(
+        re.search(
+            r"\b(can't|cannot|could not|not able|no matches|no relevant|not found)\b",
+            normalized,
+        )
+        and re.search(r"\b(retrieve|retrieved|knowledge base|manual content|search)\b", normalized)
+    )
+
+
+def _plain_source_line(line: str, heading: str) -> str:
+    line = line.strip()
+    if not line:
+        return ""
+    if re.match(r"^\|?\s*:?-{3,}", line):
+        return ""
+    heading_norm = _normalize_match_text(heading)
+    line_without_heading = re.sub(r"^#{1,6}\s*", "", line).strip()
+    line_without_heading = line_without_heading.strip("_*` ")
+    if heading_norm and _normalize_match_text(line_without_heading) == heading_norm:
+        return ""
+    if line.startswith("|") and line.endswith("|"):
+        cells = [cell.strip(" _*`") for cell in line.strip("|").split("|")]
+        cells = [cell for cell in cells if cell and not re.fullmatch(r":?-{3,}:?", cell)]
+        return " - ".join(cells)
+    line = re.sub(r"^[-*+]\s+", "", line)
+    line = re.sub(r"^#{1,6}\s*", "", line)
+    line = line.strip("_*` ")
+    return re.sub(r"\s+", " ", line).strip()
+
+
+def _source_fact_lines(source: dict, *, max_lines: int = 8) -> list[str]:
+    content = str(source.get("content_text") or source.get("snippet") or "")
+    heading = str(source.get("heading") or "")
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw_line in content.splitlines():
+        clean_line = _plain_source_line(raw_line, heading)
+        normalized = _normalize_question(clean_line)
+        if not clean_line or not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        lines.append(clean_line)
+        if len(lines) == max_lines:
+            break
+    return lines
+
+
+def _manual_label_for_answer(source: dict) -> str:
+    manual_name = str(source.get("manual_name") or "Manual").strip()
+    return re.sub(r"\s+Manual$", "", manual_name).strip() or "Manual"
+
+
+def _compose_answer_from_source(source: dict) -> str | None:
+    lines = _source_fact_lines(source)
+    if not lines:
+        return None
+    heading = str(source.get("heading") or "Manual Section").strip() or "Manual Section"
+    title = f"{heading} ({_manual_label_for_answer(source)})"
+    if len(lines) == 1:
+        return f"{title}\n\n{lines[0]}"
+    return f"{title}\n\n" + "\n".join(f"- {line}" for line in lines)
+
+
+def _source_backfill_answer(
+    *,
+    answer: str,
+    query: str,
+    cited_source_ids: list[str],
+    source_id_to_meta: dict[str, dict],
+) -> tuple[str, list[str], bool]:
+    """Replace hollow/refusal answers when retrieved public source text is usable."""
+    if not (_answer_looks_hollow(answer) or _answer_is_retrieval_refusal(answer)):
+        return answer, cited_source_ids, False
+
+    candidate_ids = list(cited_source_ids) or list(source_id_to_meta)
+    if not candidate_ids:
+        return answer, cited_source_ids, False
+
+    scored_candidates = []
+    query_tokens = _match_tokens(query)
+    for source_id in candidate_ids:
+        source = source_id_to_meta.get(source_id)
+        if not source:
+            continue
+        if _public_source_line_of_business(source) not in {"Property", "General Liability"}:
+            continue
+        if not _source_fact_lines(source, max_lines=1):
+            continue
+        score = _citation_support_score(answer, query, source)
+        heading_tokens = _match_tokens(str(source.get("heading") or ""))
+        score += len(query_tokens & heading_tokens) * 3
+        if str(source.get("manual_name") or "").lower().startswith("property"):
+            score += 2
+        scored_candidates.append((score, source_id, source))
+
+    if not scored_candidates:
+        return answer, cited_source_ids, False
+
+    scored_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    _, source_id, source = scored_candidates[0]
+    composed = _compose_answer_from_source(source)
+    if not composed:
+        return answer, cited_source_ids, False
+
+    return composed, [source_id], True
+
+
 class UnderwritingAgent:
     """Configurable Strands Agent for Coaction underwriting queries.
 
@@ -563,6 +1040,7 @@ class UnderwritingAgent:
         model_id: str | None = None,
         top_k: int = 5,
         retrieval_sources_sink: list[dict] | None = None,
+        current_query: str | None = None,
     ) -> Agent:
         """Build a Strands Agent for the given user role.
 
@@ -654,6 +1132,7 @@ class UnderwritingAgent:
             reranking_enabled=self.profile.retrieval_profile.reranking_enabled,
             top_k=top_k,
             source_sink=source_sink,
+            current_query=current_query,
         )
 
         return Agent(
@@ -674,6 +1153,10 @@ class UnderwritingAgent:
                 "follow_up_questions": [],
                 "sources": [],
             }
+
+        clarification_response = _static_clarification_response(query)
+        if clarification_response:
+            return clarification_response
 
         normalized_query = re.sub(r"[^\w\s]", "", query.strip().lower())
         greetings = {
@@ -729,6 +1212,16 @@ class UnderwritingAgent:
         answer = _strip_thinking_blocks(answer)
         answer = _strip_inline_source_markers(answer)
         answer = _normalize_underwriter_guidance(answer)
+
+        if _requires_cross_manual_clarification(query, retrieval_sources):
+            logger.info("cross_manual_clarification_required", query=query)
+            return {
+                "answer": LOB_CLARIFICATION_QUESTION,
+                "citations": [],
+                "follow_up_questions": [],
+                "sources": [],
+            }
+
         answer, suppress_citations = _enforce_explicit_evidence(
             answer=answer,
             query=query,
@@ -742,9 +1235,22 @@ class UnderwritingAgent:
         if suppress_citations:
             cited_source_ids = []
         citation_fallback_used = False
-        if not cited_source_ids and used_sources_block is None:
-            cited_source_ids = _conservative_citation_fallback(answer, source_id_to_meta)
+        if not cited_source_ids and not suppress_citations:
+            cited_source_ids = _retrieved_citation_fallback(
+                answer=answer,
+                query=query,
+                source_id_to_meta=source_id_to_meta,
+            )
             citation_fallback_used = bool(cited_source_ids)
+
+        source_backfill_used = False
+        if not suppress_citations:
+            answer, cited_source_ids, source_backfill_used = _source_backfill_answer(
+                answer=answer,
+                query=query,
+                cited_source_ids=cited_source_ids,
+                source_id_to_meta=source_id_to_meta,
+            )
 
         cited_source_ids = cited_source_ids[:CITATION_LIMIT]
 
@@ -755,6 +1261,7 @@ class UnderwritingAgent:
             cited_source_ids=cited_source_ids,
             has_used_sources_block=used_sources_block is not None,
             citation_fallback_used=citation_fallback_used,
+            source_backfill_used=source_backfill_used,
             internal_sources_retrieved=retrieved_internal_guidelines,
         )
 
@@ -808,6 +1315,10 @@ class UnderwritingAgent:
                     break
 
             answer = clean_answer
+
+        if not follow_up_questions:
+            answer, trailing_followups = _split_trailing_numbered_followups(answer)
+            follow_up_questions.extend(trailing_followups)
 
         if not follow_up_questions:
             query_lower = query.lower()
@@ -898,11 +1409,13 @@ class UnderwritingAgent:
             yield {"type": "final", "result": greeting_response}
             return
 
+        retrieval_query = _retrieval_current_query(query, history)
         retriever_token = set_retriever_context(
             knowledge_base_ids=self.profile.retrieval_profile.knowledge_base_ids,
             region=self.region,
             reranking_enabled=self.profile.retrieval_profile.reranking_enabled,
             top_k=top_k,
+            current_query=retrieval_query,
         )
 
         raw_parts: list[str] = []
@@ -918,6 +1431,7 @@ class UnderwritingAgent:
                 model_id=model_id,
                 top_k=top_k,
                 retrieval_sources_sink=retrieval_sources_sink,
+                current_query=retrieval_query,
             )
 
             async for event in agent.stream_async(query):
@@ -1001,11 +1515,13 @@ class UnderwritingAgent:
                 "sources": [],
             }
 
+        retrieval_query = _retrieval_current_query(query, history)
         retriever_token = set_retriever_context(
             knowledge_base_ids=self.profile.retrieval_profile.knowledge_base_ids,
             region=self.region,
             reranking_enabled=self.profile.retrieval_profile.reranking_enabled,
             top_k=top_k,
+            current_query=retrieval_query,
         )
 
         try:
@@ -1020,6 +1536,7 @@ class UnderwritingAgent:
                 model_id=model_id,
                 top_k=top_k,
                 retrieval_sources_sink=retrieval_sources_sink,
+                current_query=retrieval_query,
             )
 
             # Execute the agent (synchronous Strands call)

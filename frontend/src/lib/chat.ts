@@ -56,6 +56,12 @@ function parseSseBlock(block: string): unknown {
   return JSON.parse(data)
 }
 
+function findSseSeparator(value: string): { index: number; length: number } | null {
+  const match = /\r?\n\r?\n/.exec(value)
+  if (!match) return null
+  return { index: match.index, length: match[0].length }
+}
+
 export async function streamAgentResponse(
   body: {
     input_text: string
@@ -87,37 +93,58 @@ export async function streamAgentResponse(
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let finalReceived = false
+
+  const handleBlock = (rawBlock: string) => {
+    const block = rawBlock.trim()
+    if (!block) return
+    const parsed = parseSseBlock(block)
+    if (!parsed || typeof parsed !== 'object') return
+
+    const event = parsed as {
+      type?: string
+      session_id?: string
+      text?: string
+      response?: AgentInvokeResponse
+    }
+
+    if (event.type === 'session' && event.session_id) {
+      callbacks.onSession?.(event.session_id)
+    } else if (event.type === 'delta' && event.text) {
+      callbacks.onDelta?.(event.text)
+    } else if (event.type === 'final' && event.response) {
+      finalReceived = true
+      callbacks.onFinal?.(event.response)
+    }
+  }
+
+  const flushCompleteBlocks = () => {
+    let separator = findSseSeparator(buffer)
+
+    while (separator) {
+      const block = buffer.slice(0, separator.index)
+      buffer = buffer.slice(separator.index + separator.length)
+      handleBlock(block)
+      separator = findSseSeparator(buffer)
+    }
+  }
 
   while (true) {
     const { value, done } = await reader.read()
     if (done) break
 
     buffer += decoder.decode(value, { stream: true })
-    let separatorIndex = buffer.indexOf('\n\n')
+    flushCompleteBlocks()
+  }
 
-    while (separatorIndex >= 0) {
-      const block = buffer.slice(0, separatorIndex).trim()
-      buffer = buffer.slice(separatorIndex + 2)
-      separatorIndex = buffer.indexOf('\n\n')
+  buffer += decoder.decode()
+  flushCompleteBlocks()
 
-      if (!block) continue
-      const parsed = parseSseBlock(block)
-      if (!parsed || typeof parsed !== 'object') continue
+  if (buffer.trim()) {
+    handleBlock(buffer)
+  }
 
-      const event = parsed as {
-        type?: string
-        session_id?: string
-        text?: string
-        response?: AgentInvokeResponse
-      }
-
-      if (event.type === 'session' && event.session_id) {
-        callbacks.onSession?.(event.session_id)
-      } else if (event.type === 'delta' && event.text) {
-        callbacks.onDelta?.(event.text)
-      } else if (event.type === 'final' && event.response) {
-        callbacks.onFinal?.(event.response)
-      }
-    }
+  if (!finalReceived) {
+    throw new Error('Streaming response ended before a final answer was received.')
   }
 }

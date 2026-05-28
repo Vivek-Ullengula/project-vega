@@ -3,6 +3,7 @@
 
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import boto3
@@ -24,6 +25,17 @@ class DynamoDBAdapter:
 
     def _now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _to_dynamodb_value(value: Any) -> Any:
+        """Convert nested Python values into types accepted by DynamoDB."""
+        if isinstance(value, float):
+            return Decimal(str(value))
+        if isinstance(value, list):
+            return [DynamoDBAdapter._to_dynamodb_value(item) for item in value]
+        if isinstance(value, dict):
+            return {key: DynamoDBAdapter._to_dynamodb_value(item) for key, item in value.items()}
+        return value
 
     # ──────────────────────────────────────────────────────────────────────
     # User Profiles
@@ -78,7 +90,7 @@ class DynamoDBAdapter:
             "created_at": now,
             "TTL": ttl,
         }
-        self.table.put_item(Item=item)
+        self.table.put_item(Item=self._to_dynamodb_value(item))
         logger.info("session_saved", user_id=user_id, session_id=session_id)
         return item
 
@@ -111,7 +123,7 @@ class DynamoDBAdapter:
             Key={"PK": f"USER#{user_id}", "SK": f"SESSION#{session_id}"},
             UpdateExpression="SET messages = :m, title = :t, last_accessed = :la",
             ExpressionAttributeValues={
-                ":m": messages,
+                ":m": self._to_dynamodb_value(messages),
                 ":t": title,
                 ":la": self._now_iso(),
             },
@@ -168,7 +180,7 @@ class DynamoDBAdapter:
         self.table.update_item(
             Key={"PK": f"KB#{kb_id}", "SK": "META"},
             UpdateExpression=update_expr,
-            ExpressionAttributeValues=expr_values,
+            ExpressionAttributeValues=self._to_dynamodb_value(expr_values),
             ExpressionAttributeNames=expr_names,
         )
 
@@ -199,7 +211,7 @@ class DynamoDBAdapter:
             "profile": profile_data,
             "created_at": self._now_iso(),
         }
-        self.table.put_item(Item=item)
+        self.table.put_item(Item=self._to_dynamodb_value(item))
         logger.info("execution_profile_saved", agent_id=agent_id, version=version)
         return item
 

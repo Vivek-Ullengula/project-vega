@@ -17,6 +17,11 @@ FROM 513847850768.dkr.ecr.us-east-1.amazonaws.com/vega-platform:latest AS base
 
 WORKDIR /app
 
+# Production runtime is KB-only. Local synced manual files are for ingestion/debug
+# workflows and are excluded from the Docker build context.
+ENV VEGA_LOCAL_MANUAL_FALLBACK=0
+ENV VEGA_RERANKING_ENABLED=0
+
 # Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

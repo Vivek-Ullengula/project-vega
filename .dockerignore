@@ -12,3 +12,4 @@ frontend/node_modules
 global-bundle.pem
 scratch/
 tests/
+data/

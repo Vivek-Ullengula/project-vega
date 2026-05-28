@@ -42,6 +42,47 @@ function copyIconButtonClass() {
   ].join(' ')
 }
 
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // Fall back below for deployed contexts that block the async Clipboard API.
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+
+  const selection = document.getSelection()
+  const previousRange =
+    selection && selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null
+
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+
+  let copied: boolean
+  try {
+    copied = document.execCommand('copy')
+  } catch {
+    copied = false
+  } finally {
+    document.body.removeChild(textarea)
+    if (selection) {
+      selection.removeAllRanges()
+      if (previousRange) selection.addRange(previousRange)
+    }
+  }
+
+  return copied
+}
+
 function SourceList({ citations }: { citations?: SourceCitation[] }) {
   const visibleCitations =
     citations?.filter((citation) => citation.source_id || citation.title || citation.uri).slice(0, 3) ??
@@ -102,12 +143,9 @@ export function ChatMessage({ message }: ChatMessageProps) {
   const [copied, setCopied] = useState(false)
 
   const copyPlainText = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(message.content)
+    if (await copyText(message.content)) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard may be unavailable in restricted browser contexts.
     }
   }, [message.content])
 

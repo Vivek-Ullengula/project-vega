@@ -87,6 +87,7 @@ export function ChatPanel({
 
       const assistantId = messageId()
       let assistantStarted = false
+      let streamedContent = ''
 
       try {
         await streamAgentResponse(
@@ -100,6 +101,7 @@ export function ChatPanel({
               if (streamSessionId) setSessionId(streamSessionId)
             },
             onDelta: (delta) => {
+              streamedContent = `${streamedContent}${delta}`
               if (!assistantStarted) {
                 assistantStarted = true
                 setMessages((prev) => [
@@ -122,11 +124,12 @@ export function ChatPanel({
             },
             onFinal: (data) => {
               if (data.session_id) setSessionId(data.session_id)
+              const finalContent = buildAssistantContent(data).trim() || streamedContent
 
               const assistantMsg: ChatMessageType = {
                 id: assistantId,
                 role: 'assistant',
-                content: buildAssistantContent(data),
+                content: finalContent,
                 citations: data.citations ?? [],
               }
 

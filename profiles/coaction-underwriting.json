@@ -17,7 +17,7 @@
       "PNPV9G2PF5"
     ],
     "_comment": "2KMBSFAGGS = public manuals KB, PNPV9G2PF5 = internal guidelines KB",
-    "reranking_enabled": true,
+    "reranking_enabled": false,
     "citations_required": true
   },
   "memory_profile": {
