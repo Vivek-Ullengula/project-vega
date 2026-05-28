@@ -57,6 +57,10 @@ def get_kb_manager() -> BedrockKBManager:
     )
     mgr._rds_resource_arn = os.getenv("RDS_RESOURCE_ARN", "")
     mgr._rds_credentials_secret_arn = os.getenv("RDS_CREDENTIALS_SECRET_ARN", "")
+    mgr._rds_table_name = os.getenv(
+        "BEDROCK_KB_RDS_TABLE_NAME",
+        "bedrock_integration.bedrock_kb",
+    )
     return mgr
 
 
@@ -101,6 +105,7 @@ def cmd_create_kb(args):
         description=args.description or f"Knowledge Base: {args.name}",
         rds_resource_arn=mgr._rds_resource_arn,
         rds_credentials_secret_arn=mgr._rds_credentials_secret_arn,
+        rds_table_name=args.rds_table_name or mgr._rds_table_name,
     )
     kb_id = kb["knowledgeBaseId"]
     print(f"Knowledge Base created: {kb_id}")
@@ -308,6 +313,14 @@ def main():
     p_create = sub.add_parser("create-kb", help="Create a new Bedrock Knowledge Base")
     p_create.add_argument("--name", required=True, help="KB name")
     p_create.add_argument("--description", default="", help="KB description")
+    p_create.add_argument(
+        "--rds-table-name",
+        default="",
+        help=(
+            "RDS table for vector storage. Use a unique table for isolated test KBs "
+            "(default: BEDROCK_KB_RDS_TABLE_NAME or bedrock_integration.bedrock_kb)."
+        ),
+    )
 
     # add-source
     p_source = sub.add_parser("add-source", help="Add S3 data source to a KB")
@@ -371,6 +384,14 @@ def main():
     p_full.add_argument("--source-name", default="", help="Custom data source name")
     p_full.add_argument("--profile", default="", help="Agent profile to wire KB to")
     p_full.add_argument("--dry-run", action="store_true", help="Show what would happen")
+    p_full.add_argument(
+        "--rds-table-name",
+        default="",
+        help=(
+            "RDS table for vector storage. Use a unique table for isolated test KBs "
+            "(default: BEDROCK_KB_RDS_TABLE_NAME or bedrock_integration.bedrock_kb)."
+        ),
+    )
     p_full.add_argument(
         "--chunking",
         default="SEMANTIC",

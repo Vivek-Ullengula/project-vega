@@ -1,6 +1,6 @@
 import { baseApi } from './baseApi'
 import type { AgentInvokeRequest, AgentInvokeResponse } from '../../types/chat'
-import { DEFAULT_AGENT_ID } from '../../lib/chat'
+import { getAgentId } from '../../lib/chat'
 
 export const agentApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
@@ -8,7 +8,7 @@ export const agentApi = baseApi.injectEndpoints({
       AgentInvokeResponse,
       { agentId?: string; body: AgentInvokeRequest }
     >({
-      query: ({ agentId = DEFAULT_AGENT_ID, body }) => ({
+      query: ({ agentId = getAgentId(), body }) => ({
         url: `/agents/${agentId}/invoke`,
         method: 'POST',
         body,

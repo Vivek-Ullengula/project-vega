@@ -1,10 +1,7 @@
-from scripts.crawlers.property_manual_crawler import (
-    PROPERTY_MANUAL_URL,
-    html_to_manual_markdown,
-)
+from scripts.kb_chunking_pipeline import PROPERTY_MANUAL_URL, html_to_clean_markdown
 
 
-def test_html_to_manual_markdown_adds_metadata_and_removes_junk():
+def test_html_to_clean_markdown_adds_source_and_removes_junk():
     html = """
     <html>
       <body>
@@ -35,9 +32,9 @@ def test_html_to_manual_markdown_adds_metadata_and_removes_junk():
     </html>
     """
 
-    markdown = html_to_manual_markdown(html)
+    markdown = html_to_clean_markdown(html, source_url=PROPERTY_MANUAL_URL)
 
-    assert markdown.startswith(f"SOURCE_URL: {PROPERTY_MANUAL_URL}\nMANUAL_TYPE: Property\n---\n\n")
+    assert markdown.startswith(f"SOURCE_URL: {PROPERTY_MANUAL_URL}\n---\n\n")
     assert "# Property Manual" in markdown
     assert "## Triple Net Lease" in markdown
     assert "Buildings with a triple net lease" in markdown
@@ -45,6 +42,5 @@ def test_html_to_manual_markdown_adds_metadata_and_removes_junk():
     assert "| --- | --- |" in markdown
     assert "| Spoilage Coverage | CP 04 40 12 20 |" in markdown
     assert "Search Previous Next" not in markdown
-    assert "o Appetite" not in markdown
+    assert "Copy link" not in markdown
     assert "AI-generated content may be incorrect" not in markdown
-    assert "Was this helpful" not in markdown

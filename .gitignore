@@ -1,13 +1,17 @@
 # Virtual environments
 env/
 venv/
-ui/env/
 *.venv
 
 # Python cache and build
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # Environment variables and local config
 .env
@@ -30,6 +34,14 @@ Thumbs.db
 # Project Data
 data/
 scratch/
+agno-test/
+
+# Frontend dependencies and build output
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
 
 # IAM / infra (account-specific)
 iam-policy-update.json

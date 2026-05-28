@@ -144,14 +144,6 @@ GL_QUERY_SIGNALS = {
     "gl ",
     "liability",
 }
-PROPERTY_TOPIC_PHRASES = {
-    "solar panel",
-    "solar panels",
-    "triple net lease",
-    "vacant building",
-    "vacant buildings",
-    "wildfire guide",
-}
 LOB_SELECTION_DIRECTIVE_TOKENS = {
     "coverage",
     "correct",
@@ -174,15 +166,6 @@ LOB_SELECTION_DIRECTIVE_TOKENS = {
     "yep",
     "yes",
 }
-AMBIGUOUS_LOB_TOPIC_PHRASES = {
-    "solar panel",
-    "solar panels",
-    "triple net lease",
-    "vacant building",
-    "vacant buildings",
-}
-
-
 class SafeBedrockModel(BedrockModel):
     """BedrockModel wrapper that strips reasoningContent blocks.
 
@@ -353,25 +336,6 @@ def _query_mentions_line_of_business(query: str) -> bool:
     )
 
 
-def _query_matches_topic_phrases(query: str, phrases: set[str]) -> bool:
-    query_norm = _normalize_match_text(query)
-    query_tokens = _match_tokens(query)
-    for phrase in phrases:
-        phrase_norm = _normalize_match_text(phrase)
-        phrase_tokens = _match_tokens(phrase)
-        if phrase_norm in query_norm or phrase_tokens <= query_tokens:
-            return True
-    return False
-
-
-def _query_matches_known_property_topic(query: str) -> bool:
-    return _query_matches_topic_phrases(query, PROPERTY_TOPIC_PHRASES)
-
-
-def _query_matches_ambiguous_lob_topic(query: str) -> bool:
-    return _query_matches_topic_phrases(query, AMBIGUOUS_LOB_TOPIC_PHRASES)
-
-
 def _query_is_lob_selection_only(query: str) -> bool:
     normalized = _normalize_match_text(query)
     if not normalized:
@@ -420,18 +384,26 @@ def _retrieval_current_query(query: str, history: list[dict] | None) -> str:
 
 def _public_source_line_of_business(source: dict) -> str | None:
     manual_name = (source.get("manual_name") or "").lower()
-    if "internal" in manual_name:
+    manual_type = (source.get("manual_type") or "").lower()
+    url = (source.get("url") or "").lower()
+    combined = f"{manual_name} {manual_type} {url}"
+    if "internal" in combined:
         return None
-    if "property" in manual_name:
+    if "property" in combined:
         return "Property"
-    if "general liability" in manual_name or "guide" in manual_name:
+    if (
+        "general liability" in combined
+        or "guide" in combined
+        or re.search(r"/manuals/\d{4,}\.html", url)
+    ):
         return "General Liability"
     return None
 
 
 def _source_evidence_text(source: dict) -> str:
     return " ".join(
-        str(source.get(key) or "") for key in ("heading", "manual_name", "content_text", "snippet")
+        str(source.get(key) or "")
+        for key in ("heading", "manual_name", "manual_type", "aliases", "content_text", "snippet")
     )
 
 
@@ -474,25 +446,7 @@ def _requires_cross_manual_clarification(query: str, retrieval_sources: list[dic
         if _source_matches_query_topic(source, query):
             matched_lobs.add(lob)
 
-    if "General Liability" in matched_lobs and _query_matches_known_property_topic(query):
-        return True
-
     return {"Property", "General Liability"} <= matched_lobs
-
-
-def _static_clarification_response(query: str) -> dict | None:
-    """Clarify known cross-LOB topics before model streaming starts."""
-    if _query_mentions_line_of_business(query):
-        return None
-    if not _query_matches_ambiguous_lob_topic(query):
-        return None
-    logger.info("cross_manual_clarification_short_circuited", query=query)
-    return {
-        "answer": LOB_CLARIFICATION_QUESTION,
-        "citations": [],
-        "follow_up_questions": [],
-        "sources": [],
-    }
 
 
 def _asks_for_availability(query: str) -> bool:
@@ -587,76 +541,6 @@ def _openai_generation_params(model_id: str, temperature: float, max_tokens: int
     }
 
 
-def select_best_citations(cited_urls: list[str], query: str) -> list[str]:
-    """Intelligently filter and prioritize citations per user specifications:
-    - Default to a single absolute most relevant citation for most queries.
-    - Keep up to 3 citations only for comparison or compound queries.
-    - Prioritize class codes (numeric filename) as the top citation.
-    """
-    if not cited_urls:
-        return []
-
-    # Deduplicate while preserving order
-    unique_urls = []
-    for u in cited_urls:
-        if u not in unique_urls:
-            unique_urls.append(u)
-
-    # Classify URLs (class codes are purely numeric filenames)
-    class_code_urls = []
-    other_urls = []
-    for url in unique_urls:
-        filename = url.rstrip("/").split("/")[-1].replace(".html", "")
-        if filename.isdigit():
-            class_code_urls.append(url)
-        else:
-            other_urls.append(url)
-
-    # Normalize query
-    query_lower = query.lower()
-
-    # Determine if comparison or compound query
-    needs_multiple = (
-        any(
-            w in query_lower
-            for w in [
-                "compare",
-                "difference",
-                "versus",
-                "vs",
-                "both",
-                "multiple",
-                "list of",
-                "all classes",
-                "and",
-                "or",
-            ]
-        )
-        and len(unique_urls) > 1
-    )
-
-    if needs_multiple:
-        # Return up to 3 citations, prioritizing class codes first
-        combined = class_code_urls + other_urls
-        return combined[:CITATION_LIMIT]
-    else:
-        # Single citation preferred
-        # A. If the query mentions a specific class code, try to find a matching URL
-        class_codes_in_query = re.findall(r"\b\d{5}\b", query)
-        if class_codes_in_query:
-            for code in class_codes_in_query:
-                for url in unique_urls:
-                    if code in url:
-                        return [url]
-
-        # B. Prioritize any class code URL if retrieved
-        if class_code_urls:
-            return [class_code_urls[0]]
-
-        # C. Default to the absolute top/first citation
-        return [unique_urls[0]]
-
-
 def _strip_used_sources_block(raw_answer: str) -> tuple[str, str | None]:
     """Remove the hidden citation block and return its raw contents."""
     used_sources_match = re.search(
@@ -748,7 +632,7 @@ def _build_public_source_maps(
     retrieved_internal_guidelines = False
 
     for src in retrieval_sources:
-        if src.get("manual_name") == "Internal Guidelines":
+        if "internal" in str(src.get("manual_name") or src.get("manual_type") or "").lower():
             retrieved_internal_guidelines = True
             continue
 
@@ -969,7 +853,9 @@ def _source_backfill_answer(
     source_id_to_meta: dict[str, dict],
 ) -> tuple[str, list[str], bool]:
     """Replace hollow/refusal answers when retrieved public source text is usable."""
-    if not (_answer_looks_hollow(answer) or _answer_is_retrieval_refusal(answer)):
+    looks_hollow = _answer_looks_hollow(answer)
+    is_uncited_retrieval_refusal = _answer_is_retrieval_refusal(answer) and not cited_source_ids
+    if not (looks_hollow or is_uncited_retrieval_refusal):
         return answer, cited_source_ids, False
 
     candidate_ids = list(cited_source_ids) or list(source_id_to_meta)
@@ -1024,6 +910,8 @@ class UnderwritingAgent:
             knowledge_base_ids=profile.retrieval_profile.knowledge_base_ids,
             region=region,
             reranking_enabled=profile.retrieval_profile.reranking_enabled,
+            raw_retrieval_mode=profile.retrieval_profile.raw_retrieval_mode,
+            search_type=profile.retrieval_profile.search_type,
         )
 
         logger.info(
@@ -1133,6 +1021,8 @@ class UnderwritingAgent:
             top_k=top_k,
             source_sink=source_sink,
             current_query=current_query,
+            raw_retrieval_mode=self.profile.retrieval_profile.raw_retrieval_mode,
+            search_type=self.profile.retrieval_profile.search_type,
         )
 
         return Agent(
@@ -1153,10 +1043,6 @@ class UnderwritingAgent:
                 "follow_up_questions": [],
                 "sources": [],
             }
-
-        clarification_response = _static_clarification_response(query)
-        if clarification_response:
-            return clarification_response
 
         normalized_query = re.sub(r"[^\w\s]", "", query.strip().lower())
         greetings = {
@@ -1205,6 +1091,13 @@ class UnderwritingAgent:
         history: list[dict] | None,
     ) -> dict:
         """Convert raw agent output plus retrieval metadata into the public response."""
+        if self.profile.retrieval_profile.raw_retrieval_mode:
+            return self._finalize_raw_kb_test_response(
+                raw_answer=raw_answer,
+                retrieval_sources=retrieval_sources,
+                query=query,
+            )
+
         source_id_to_meta, url_to_source_id, retrieved_internal_guidelines = (
             _build_public_source_maps(retrieval_sources)
         )
@@ -1395,6 +1288,68 @@ class UnderwritingAgent:
             "sources": sources,
         }
 
+    def _finalize_raw_kb_test_response(
+        self,
+        *,
+        raw_answer: str,
+        retrieval_sources: list[dict],
+        query: str,
+    ) -> dict:
+        """Minimal response shaping for raw KB UI tests."""
+        source_id_to_meta, url_to_source_id, retrieved_internal_guidelines = (
+            _build_public_source_maps(retrieval_sources)
+        )
+        answer, used_sources_block = _strip_used_sources_block(raw_answer)
+        answer = _strip_thinking_blocks(answer)
+        answer = _strip_inline_source_markers(answer).strip()
+
+        cited_source_ids = _parse_used_source_ids(
+            used_sources_block,
+            source_id_to_meta=source_id_to_meta,
+            url_to_source_id=url_to_source_id,
+        )
+        citation_fallback_used = False
+        if not cited_source_ids:
+            cited_source_ids = _retrieved_citation_fallback(
+                answer=answer,
+                query=query,
+                source_id_to_meta=source_id_to_meta,
+            )
+            citation_fallback_used = bool(cited_source_ids)
+
+        cited_source_ids = cited_source_ids[:CITATION_LIMIT]
+
+        logger.info(
+            "raw_kb_test_citation_resolution",
+            cited_count=len(cited_source_ids),
+            retriever_count=len(source_id_to_meta),
+            cited_source_ids=cited_source_ids,
+            has_used_sources_block=used_sources_block is not None,
+            citation_fallback_used=citation_fallback_used,
+            internal_sources_retrieved=retrieved_internal_guidelines,
+        )
+
+        sources = [source_id_to_meta[source_id]["url"] for source_id in cited_source_ids]
+        citations: list[SourceCitation] = []
+        for source_id in cited_source_ids:
+            meta = source_id_to_meta[source_id]
+            citations.append(
+                SourceCitation(
+                    source_id=source_id,
+                    title=meta.get("heading", "") or meta["url"],
+                    uri=meta["url"],
+                    manual_name=meta.get("manual_name", ""),
+                    class_code=meta.get("class_code"),
+                )
+            )
+
+        return {
+            "answer": answer,
+            "citations": citations,
+            "follow_up_questions": [],
+            "sources": sources,
+        }
+
     async def stream(
         self,
         query: str,
@@ -1416,6 +1371,8 @@ class UnderwritingAgent:
             reranking_enabled=self.profile.retrieval_profile.reranking_enabled,
             top_k=top_k,
             current_query=retrieval_query,
+            raw_retrieval_mode=self.profile.retrieval_profile.raw_retrieval_mode,
+            search_type=self.profile.retrieval_profile.search_type,
         )
 
         raw_parts: list[str] = []
@@ -1481,40 +1438,6 @@ class UnderwritingAgent:
         if static_response:
             return static_response
 
-        # Short-circuit greetings & small talk to bypass aggressive off-topic safeguard model
-        normalized_query = re.sub(r"[^\w\s]", "", query.strip().lower())
-        greetings = {
-            "hi",
-            "hello",
-            "hey",
-            "hello there",
-            "good morning",
-            "good afternoon",
-            "good evening",
-            "greetings",
-            "hi there",
-            "hey there",
-            "howdy",
-            "hola",
-            "hey ya",
-            "hi ya",
-            "how are you",
-            "how are you doing",
-            "yo",
-        }
-        if normalized_query in greetings or not normalized_query:
-            logger.info("greeting_short_circuited", query=query)
-            return {
-                "answer": "Hello! I am Coaction's Binding Authority underwriting assistant. How can I help you with underwriting, class codes, or manual guidelines today?",
-                "citations": [],
-                "follow_up_questions": [
-                    "What are the eligibility guidelines?",
-                    "What operations are prohibited?",
-                    "How do I search for class codes?",
-                ],
-                "sources": [],
-            }
-
         retrieval_query = _retrieval_current_query(query, history)
         retriever_token = set_retriever_context(
             knowledge_base_ids=self.profile.retrieval_profile.knowledge_base_ids,
@@ -1522,6 +1445,8 @@ class UnderwritingAgent:
             reranking_enabled=self.profile.retrieval_profile.reranking_enabled,
             top_k=top_k,
             current_query=retrieval_query,
+            raw_retrieval_mode=self.profile.retrieval_profile.raw_retrieval_mode,
+            search_type=self.profile.retrieval_profile.search_type,
         )
 
         try:
@@ -1556,160 +1481,3 @@ class UnderwritingAgent:
             query=query,
             history=history,
         )
-
-        source_id_to_meta, url_to_source_id, retrieved_internal_guidelines = (
-            _build_public_source_maps(retrieval_sources)
-        )
-        answer, used_sources_block = _strip_used_sources_block(raw_answer)
-        answer = _strip_thinking_blocks(answer)
-        answer = _strip_inline_source_markers(answer)
-        answer = _normalize_underwriter_guidance(answer)
-        cited_source_ids = _parse_used_source_ids(
-            used_sources_block,
-            source_id_to_meta=source_id_to_meta,
-            url_to_source_id=url_to_source_id,
-        )
-        citation_fallback_used = False
-        if not cited_source_ids and used_sources_block is None:
-            cited_source_ids = _conservative_citation_fallback(answer, source_id_to_meta)
-            citation_fallback_used = bool(cited_source_ids)
-        cited_source_ids = cited_source_ids[:CITATION_LIMIT]
-
-        logger.info(
-            "citation_resolution",
-            cited_count=len(cited_source_ids),
-            retriever_count=len(source_id_to_meta),
-            cited_source_ids=cited_source_ids,
-            has_used_sources_block=used_sources_block is not None,
-            citation_fallback_used=citation_fallback_used,
-            internal_sources_retrieved=retrieved_internal_guidelines,
-        )
-
-        # ─── STEP 2: Extract follow-up questions ────────────────────────
-        follow_up_questions: list[str] = []
-
-        # Support various headers the LLM might use for follow-ups
-        fu_patterns = [
-            r"(?i)\*{0,2}\s*You might also want to ask:?\s*\*{0,2}",
-            r"(?i)\*{0,2}\s*Follow-up questions:?\s*\*{0,2}",
-            r"(?i)\*{0,2}\s*Recommended questions:?\s*\*{0,2}",
-            r"(?i)\*{0,2}\s*Suggested questions:?\s*\*{0,2}",
-            r"(?i)\*{0,2}\s*Other questions you may ask:?\s*\*{0,2}",
-        ]
-
-        matched_pattern = None
-        for pattern in fu_patterns:
-            if re.search(pattern, answer):
-                matched_pattern = pattern
-                break
-
-        if matched_pattern:
-            parts = re.split(matched_pattern, answer, maxsplit=1)
-            clean_answer = parts[0].strip()
-            fu_text = parts[1]
-            matches = re.findall(r"\b\d+\b\.\s*(.+)", fu_text)
-            raw_followups = [m.strip() for m in matches if m.strip()]
-
-            # Dedup against history
-            historical_questions: set[str] = set()
-            if history:
-                for msg in history:
-                    msg_role = (msg.get("role") or "").strip().lower()
-                    content = msg.get("content") or ""
-                    if msg_role == "user":
-                        nq = _normalize_question(content)
-                        if nq:
-                            historical_questions.add(nq)
-                    elif msg_role == "assistant":
-                        for prev_fu in _extract_followups_from_text(content):
-                            nfu = _normalize_question(prev_fu)
-                            if nfu:
-                                historical_questions.add(nfu)
-
-            seen: set[str] = set()
-            for question in raw_followups:
-                normalized = _normalize_question(question)
-                if not normalized or normalized in historical_questions or normalized in seen:
-                    continue
-                seen.add(normalized)
-                follow_up_questions.append(question)
-                if len(follow_up_questions) == 3:
-                    break
-
-            answer = clean_answer
-
-        # If no follow-ups were returned by the LLM or parsed, generate high-quality fallback questions dynamically
-        if not follow_up_questions:
-            query_lower = query.lower()
-            if (
-                "property" in query_lower
-                or "building" in query_lower
-                or "limit" in query_lower
-                or "tiv" in query_lower
-            ):
-                follow_up_questions = [
-                    "What is the maximum building age for property coverage?",
-                    "What are the referral thresholds for high Total Insured Value?",
-                    "Are vacant buildings eligible for property insurance?",
-                ]
-            elif (
-                "gl" in query_lower
-                or "liability" in query_lower
-                or "class" in query_lower
-                or "code" in query_lower
-            ):
-                follow_up_questions = [
-                    "What general liability operations are prohibited?",
-                    "How do I locate the correct class code for a business?",
-                    "What are the referral guidelines for general liability?",
-                ]
-            elif (
-                "guidelines" in query_lower
-                or "commission" in query_lower
-                or "territory" in query_lower
-                or "credit" in query_lower
-            ):
-                follow_up_questions = [
-                    "What is the standard commission rate?",
-                    "What are the credit authority thresholds for underwriters?",
-                    "Are there specific territorial sales restrictions?",
-                ]
-            else:
-                follow_up_questions = [
-                    "What are the eligibility guidelines?",
-                    "What operations are prohibited?",
-                    "How do I search for class codes?",
-                ]
-
-        logger.info(
-            "follow_up_extraction", count=len(follow_up_questions), questions=follow_up_questions
-        )
-
-        # ─── STEP 3: Build citation objects ──────────────────────────────
-        sources = [source_id_to_meta[source_id]["url"] for source_id in cited_source_ids]
-        citations: list[SourceCitation] = []
-        seen_source_ids: set[str] = set()
-
-        for source_id in cited_source_ids:
-            if source_id in seen_source_ids:
-                continue
-            seen_source_ids.add(source_id)
-            meta = source_id_to_meta[source_id]
-            citations.append(
-                SourceCitation(
-                    source_id=source_id,
-                    title=meta.get("heading", "") or meta["url"],
-                    uri=meta["url"],
-                    manual_name=meta.get("manual_name", ""),
-                    class_code=meta.get("class_code"),
-                )
-            )
-
-        logger.info("citations_built", count=len(citations))
-
-        return {
-            "answer": answer,
-            "citations": citations,
-            "follow_up_questions": follow_up_questions,
-            "sources": sources,
-        }

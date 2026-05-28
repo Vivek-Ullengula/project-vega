@@ -1,10 +1,8 @@
 from agents.underwriting_agent import (
-    LOB_CLARIFICATION_QUESTION,
     UNDERWRITER_GUIDANCE,
     _normalize_underwriter_guidance,
     _retrieval_current_query,
     _source_backfill_answer,
-    _static_clarification_response,
     _requires_cross_manual_clarification,
     _retrieved_citation_fallback,
     _split_trailing_numbered_followups,
@@ -52,31 +50,24 @@ def test_cross_manual_clarification_required_for_unspecified_exact_topic():
 
 
 def test_cross_manual_clarification_required_for_known_property_topic_even_if_gl_wins_retrieval():
+    property_vacant_source = {
+        "source_id": "S4",
+        "url": "https://bindingauthority.coactionspecialty.com/manuals/property.html",
+        "heading": "Vacant Buildings",
+        "manual_name": "Property Manual",
+        "content_text": "Buildings continuously vacant for more than 24-months require approval.",
+    }
+
     assert _requires_cross_manual_clarification(
         "Vacant building",
-        [GL_VACANT_SOURCE],
+        [GL_VACANT_SOURCE, property_vacant_source],
     )
 
 
-def test_ambiguous_lob_topic_clarifies_before_model_streaming():
-    assert _static_clarification_response("Vacant building") == {
-        "answer": LOB_CLARIFICATION_QUESTION,
-        "citations": [],
-        "follow_up_questions": [],
-        "sources": [],
-    }
-
-
-def test_property_specific_query_does_not_short_circuit_to_clarification():
-    assert _static_clarification_response("Vacant building property") is None
-
-
-def test_solar_building_limit_question_does_not_short_circuit_to_clarification():
-    assert (
-        _static_clarification_response(
-            "Should the value of solar panels be included in the building limit?"
-        )
-        is None
+def test_cross_manual_clarification_not_required_when_only_one_lob_retrieved():
+    assert not _requires_cross_manual_clarification(
+        "Vacant building",
+        [GL_VACANT_SOURCE],
     )
 
 
@@ -191,6 +182,39 @@ def test_source_backfill_replaces_hollow_property_section_answer():
     assert answer.startswith("Vacant Buildings (Property)")
     assert "Buildings continuously vacant" in answer
     assert "Structural renovations" in answer
+
+
+def test_source_backfill_preserves_sourced_negative_answer():
+    answer, cited_source_ids, used = _source_backfill_answer(
+        answer=(
+            "Cyber liability coverage is not explicitly listed as a coverage option for "
+            "class code 51970, so I cannot confirm its availability from the retrieved "
+            "manual content."
+        ),
+        query="Is cyber liability coverage available for class code 51970?",
+        cited_source_ids=["S1"],
+        source_id_to_meta={
+            "S1": {
+                "source_id": "S1",
+                "url": "https://bindingauthority.coactionspecialty.com/manuals/51970.html",
+                "heading": "Class Code 51970",
+                "manual_name": "General Liability Manual",
+                "class_code": "51970",
+                "content_text": (
+                    "Class Code 51970 - Cosmetics Manufacturing\n"
+                    "Coverage Options\n"
+                    "Employee Benefits Liability\n"
+                    "Product Withdrawal Expense\n"
+                    "Worldwide Coverage\n"
+                    "Hired & Non-Owned Auto"
+                ),
+            }
+        },
+    )
+
+    assert not used
+    assert cited_source_ids == ["S1"]
+    assert answer.startswith("Cyber liability coverage is not explicitly listed")
 
 
 def test_underwriter_guidance_normalization_preserves_approval_rules():

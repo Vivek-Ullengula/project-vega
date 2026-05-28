@@ -1,4 +1,4 @@
-# Project Vega — Coaction Agent Platform
+# Project Vega - Coaction Agent Platform
 
 Configuration-driven, multi-agent platform for Coaction underwriting assistants.  
 Built with **Strands Agent SDK**, **Amazon Bedrock**, **Cognito Auth**, and **DynamoDB**.
@@ -9,8 +9,8 @@ Built with **Strands Agent SDK**, **Amazon Bedrock**, **Cognito Auth**, and **Dy
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                          Gradio UI (/ui)                            │
-│   Signup → Confirm → Login → Chat (streaming) → KB Management      │
+│                          React UI (/login)                          │
+│   Signup -> Confirm -> Login -> Chat (streaming)                    │
 └───────────────┬──────────────────────────────────────────────────────┘
                 │ HTTP (Bearer JWT)
 ┌───────────────▼──────────────────────────────────────────────────────┐
@@ -48,7 +48,7 @@ Built with **Strands Agent SDK**, **Amazon Bedrock**, **Cognito Auth**, and **Dy
 | **Domain** | `domain/` | Pydantic models: requests, responses, profiles, citations |
 | **Runtime** | `runtime/` | Base agent, orchestrator, response composer, host adapters |
 | **Services** | `services/` | Authorization, guardrails, memory, model gateway, telemetry, audit |
-| **UI** | `ui/` | Gradio web interface with auth, chat, KB management |
+| **Frontend** | `frontend/` | React/Vite chat application served by FastAPI in production |
 | **Scripts** | `scripts/` | Bootstrap pipeline, crawlers, pre-push checks |
 | **Entrypoints** | `entrypoints/` | AgentCore Runtime MicroVM listener |
 | **Profiles** | `profiles/` | JSON execution profile definitions |
@@ -102,15 +102,76 @@ RDS_CREDENTIALS_SECRET_ARN=...
 ### 3. Run the Platform
 
 ```bash
-# Unified mode (API + UI on one port)
+# Unified mode (API + React UI on one port)
 python -m uvicorn app.main:app --reload
-# → API at http://localhost:8000/v1
-# → UI at http://localhost:8000/ui
-# → Health at http://localhost:8000/health
-
-# Standalone UI (if running API separately)
-python ui/gradio_app.py
+# -> API at http://localhost:8000/v1
+# -> React UI at http://localhost:8000/login
+# -> Health at http://localhost:8000/health
 ```
+
+---
+
+## KB Chunking For Ingestion
+
+Production retrieval is KB-only. The `data/` folder is for crawling, chunking,
+and upload workflows; it is excluded from the Docker image.
+
+Generate Bedrock-ready chunks locally before uploading to S3. The default output
+is under `scratch/kb_chunks_universal/` so the current production chunks are not
+touched.
+
+```bash
+python -m scripts.kb_chunking_pipeline \
+  --input data/bedrock_ingest https://bindingauthority.coactionspecialty.com/manuals/property.html \
+  --output scratch/kb_chunks_universal \
+  --clean \
+  --print-sources
+```
+
+The chunker accepts websites, Markdown/HTML/text, CSV/Excel, Word, PDF, JSON,
+and code-like files. It chooses a strategy by source type: heading/table-aware
+hybrid for manuals and websites, row-group chunks for spreadsheets, page-aware
+chunks for PDFs, and recursive splitting for generic text/code.
+
+Optional Agno/Docling-assisted parsing and LLM boundary selection:
+
+```bash
+pip install -r requirements-ingestion.txt
+python -m scripts.kb_chunking_pipeline \
+  --input ./new_docs https://example.com/manual.html \
+  --output scratch/kb_chunks_universal \
+  --clean \
+  --prefer-agno-reader \
+  --use-agno
+```
+
+Upload the generated chunk folder to S3, then add/sync the
+Bedrock data source with chunking set to `NONE` so Bedrock does not split the
+already prepared chunks again.
+
+```bash
+python scripts/kb_pipeline.py add-source \
+  --kb-id YOUR_KB_ID \
+  --bucket YOUR_BUCKET \
+  --prefix YOUR_S3_PREFIX \
+  --chunking NONE
+python scripts/kb_pipeline.py sync --kb-id YOUR_KB_ID --data-source-id YOUR_DS_ID
+```
+
+Check `manifest.json` before syncing. It records parser choice, source hashes,
+chunk counts by source type/strategy, duplicate content, warnings, and locator
+metadata such as page, sheet, row range, block index, and character spans for
+future citation highlighting.
+
+To test a newly synced KB without the app retriever, query Bedrock directly:
+
+```bash
+python scripts/kb_raw_retrieval_eval.py --kb-id YOUR_KB_ID --top-k 5 --search-type SEMANTIC
+python scripts/kb_raw_retrieval_eval.py --kb-id YOUR_KB_ID --query "Solar Panels"
+```
+
+For a raw retrieval smoke test, use `scripts/kb_raw_retrieval_eval.py` before
+wiring a new KB into `profiles/coaction-underwriting.json`.
 
 ---
 
@@ -228,7 +289,7 @@ This will automatically:
 - Create AgentCore Memory (if configured)
 - Deploy the agent to the AWS AgentCore Runtime
 
-3. **The agent is now live** — invoke it via the API or Gradio UI.
+3. **The agent is now live** - invoke it via the API or React UI.
 
 ---
 
@@ -356,11 +417,7 @@ project-vega/
 ├── app/
 │   ├── main.py                     # FastAPI app with lifespan wiring
 │   ├── core/
-│   │   ├── auth.py                 # Local auth fallback
 │   │   └── logger.py               # Structured logging
-│   ├── db/
-│   │   ├── database.py             # SQLAlchemy (local dev)
-│   │   └── models.py               # Local DB models
 │   ├── dependencies/
 │   │   ├── identity.py             # Cognito JWT identity extraction
 │   │   ├── services.py             # DI container
@@ -373,16 +430,11 @@ project-vega/
 │       ├── auth_router.py          # /v1/auth/signup|confirm|login
 │       ├── health.py               # /health, /ping, /ready
 │       ├── kb_router.py            # /v1/knowledge-bases CRUD
-│       ├── session_router.py       # /v1/sessions CRUD
-│       ├── feedback.py             # User feedback
-│       └── threads.py              # Thread management
+│       └── session_router.py       # /v1/sessions CRUD
 ├── control_plane/
-│   ├── agent_registry.py           # Agent registration
 │   ├── deployment_manager.py       # Cloud deployment
 │   ├── execution_profile_repository.py  # Profile loading
-│   ├── kb_manager.py               # KB provisioning (pipeline)
-│   ├── memory_manager.py           # Memory provisioning (pipeline)
-│   └── prompt_repository.py        # Prompt loading from config
+│   └── memory_manager.py           # Memory provisioning (pipeline)
 ├── domain/
 │   └── models.py                   # All Pydantic models (unified)
 ├── entrypoints/
@@ -400,20 +452,17 @@ project-vega/
 │   ├── authorization.py            # Platform authorization
 │   ├── guardrails.py               # Bedrock Guardrails integration
 │   ├── memory.py                   # AgentCore Memory provider
-│   ├── model_gateway.py            # Strands + Bedrock model gateway
-│   ├── retrieval.py                # KB retrieval (legacy/fallback)
-│   ├── session_manager.py          # In-memory session fallback
 │   ├── telemetry.py                # CloudWatch telemetry emitter
 │   └── tool_gateway.py             # Read-only tool gateway
-├── ui/
-│   └── gradio_app.py               # Gradio UI (auth + chat + KB mgmt)
+├── frontend/
+│   └── src/                        # React/Vite chat UI
 ├── scripts/
 │   ├── pre_push_check.py           # CI verification (ruff + pytest)
 │   ├── platform_bootstrap.py       # Automated agent pipeline
 │   ├── query.py                    # Testing tool
 │   └── crawlers/                   # Web crawlers for data ingestion
 ├── profiles/
-│   └── vega_binding_authority_bot.json  # Default agent profile
+│   └── coaction-underwriting.json  # Default underwriting profile
 ├── tests/
 │   └── unit/                       # Unit tests
 ├── .github/workflows/ci.yml        # GitHub Actions CI
@@ -465,4 +514,4 @@ project-vega/
 
 ## License
 
-Proprietary — Coaction Specialty Insurance.
+Proprietary - Coaction Specialty Insurance.

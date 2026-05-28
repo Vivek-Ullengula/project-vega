@@ -86,6 +86,8 @@ class RetrievalProfile(BaseModel):
     knowledge_base_ids: list[str] = Field(default_factory=list)
     metadata_filters: dict[str, Any] = Field(default_factory=dict)
     reranking_enabled: bool = True
+    raw_retrieval_mode: bool = False
+    search_type: Literal["HYBRID", "SEMANTIC"] = "HYBRID"
     min_confidence: float | None = None
     citations_required: bool = True
 

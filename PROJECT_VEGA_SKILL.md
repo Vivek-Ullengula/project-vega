@@ -13,7 +13,7 @@ AWS-first, governed, headless agentic platform. Control plane separated from run
 - Session/data persistence: **DynamoDB** (single-table design)
 - Knowledge retrieval: **Bedrock Knowledge Bases** via `search_manuals` tool
 - Deployment targets: **ECS/Fargate** (primary), **Bedrock AgentCore Runtime** (MicroVM)
-- UI: **Gradio** (mounted at `/ui` on the FastAPI server)
+- UI: **React/Vite** (served by FastAPI from `frontend/dist`, login at `/login`)
 
 ---
 
@@ -86,7 +86,7 @@ PROFILE#<agent_id>         VERSION#<version>      ExecutionProfile    model, ret
 
 | Layer | Technology | Module |
 |---|---|---|
-| Channel & Access | FastAPI (REST), Gradio (UI) | `app/`, `ui/` |
+| Channel & Access | FastAPI (REST), React UI | `app/`, `frontend/` |
 | Identity & Auth | AWS Cognito + JWT | `adapters/aws/cognito.py`, `jwt_verifier.py` |
 | Control Plane | DynamoDB-backed registry | `control_plane/` |
 | Runtime Plane | Strands `Agent` + `BedrockModel` | `runtime/`, `agents/` |
@@ -258,8 +258,7 @@ project-vega/
 │   ├── model_gateway.py       # Strands + Bedrock model gateway
 │   ├── telemetry.py           # CloudWatch telemetry
 │   └── tool_gateway.py        # Read-only tool gateway
-├── ui/
-│   └── gradio_app.py          # Gradio UI (auth + chat + KB mgmt)
+├── frontend/                  # React/Vite UI
 ├── scripts/                   # CLI & automation
 │   ├── pre_push_check.py      # CI: ruff + format + pytest
 │   ├── platform_bootstrap.py  # Automated agent pipeline
@@ -423,7 +422,7 @@ docker run -p 8000:8000 --env-file .env project-vega
 | Boto3 client creation | Only through `Boto3SessionFactory` |
 | Deployment target | ECS/Fargate (primary), AgentCore Runtime (secondary) |
 | CI/CD | Ruff linter + Ruff formatter + Pytest |
-| UI | Gradio mounted at `/ui` on FastAPI server |
+| UI | React/Vite build mounted by FastAPI |
 
 ---
 

@@ -7,7 +7,7 @@ Wires all layers per HLD:
 - AgentService (core agent invocation pipeline)
 - Middleware (correlation ID, error handling)
 - Routers (auth, sessions, knowledge bases, agent invoke)
-- Gradio UI (unified deployment)
+- React SPA static serving
 """
 
 import os
@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan: initialize all services at startup per HLD build sequence."""
     logger.info("app_starting")
 
-    # ── Configuration from environment ──
+    # Configuration from environment.
     region = _env("AWS_REGION", "us-east-1")
     cognito_user_pool_id = _env("COGNITO_USER_POOL_ID")
     cognito_app_client_id = _env("COGNITO_APP_CLIENT_ID")
@@ -76,10 +76,10 @@ async def lifespan(app: FastAPI):
     rds_resource_arn = _env("RDS_RESOURCE_ARN")
     rds_credentials_secret_arn = _env("RDS_CREDENTIALS_SECRET_ARN")
 
-    # ── Step 1: Boto3 Client Factory (HLD §15) ──
+    # Step 1: Boto3 client factory.
     # (Boto3 session factory is handled via services container on demand)
 
-    # ── Step 2: Cognito Auth ──
+    # Step 2: Cognito auth.
     cognito_adapter = None
     if cognito_user_pool_id and cognito_app_client_id:
         cognito_config = CognitoConfig(
@@ -93,13 +93,13 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("cognito_not_configured")
 
-    # ── Step 3: DynamoDB ──
+    # Step 3: DynamoDB.
     dynamodb_adapter = DynamoDBAdapter(table_name=dynamodb_table, region=region)
 
-    # ── Step 4: Agent Service (core invocation pipeline) ──
+    # Step 4: Agent service.
     agent_service = AgentService(dynamodb=dynamodb_adapter, region=region)
 
-    # ── Step 5: Bedrock KB Manager ──
+    # Step 5: Bedrock KB manager.
     kb_manager = BedrockKBManager(
         region=region,
         role_arn=kb_role_arn,
@@ -111,7 +111,7 @@ async def lifespan(app: FastAPI):
     # Store in app state for AgentCore invocation handlers
     app.state.agent_service = agent_service
 
-    # ── Step 6: Wire Routers ──
+    # Step 6: Wire routers.
     init_auth_router(cognito_adapter, dynamodb_adapter)
     init_session_router(dynamodb_adapter)
     init_kb_router(kb_manager, dynamodb_adapter)
@@ -155,7 +155,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # ── Middleware (HLD §12) ──
+    # Middleware.
     app.add_middleware(ErrorHandlerMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
     cors_origin_raw = _env(
@@ -171,14 +171,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # ── Routers (HLD §10) — prefixed with /v1 ──
+    # Routers are prefixed with /v1.
     app.include_router(auth_router, prefix="/v1")
     app.include_router(session_router, prefix="/v1")
     app.include_router(kb_router, prefix="/v1")
     app.include_router(agent_router, prefix="/v1")
     app.include_router(health_router)
 
-    # ── AgentCore Invocation Paths ──
+    # AgentCore invocation paths.
     @app.post("/invocations")
     async def invocations_root(
         request: Request,
@@ -195,18 +195,7 @@ def create_app() -> FastAPI:
         """Root handler for direct Bedrock AgentCore invocations."""
         return await _handle_agentcore_invoke(request, identity)
 
-    # ── Mount Gradio UI ──
-    try:
-        from ui.gradio_app import build as build_gradio
-        import gradio as gr
-
-        gradio_app = build_gradio()
-        gr.mount_gradio_app(app, gradio_app, path="/ui")
-        logger.info("gradio_ui_mounted", path="/ui")
-    except Exception as e:
-        logger.warning("gradio_ui_not_mounted", error=str(e))
-
-    # ── Mount React Frontend SPA (Production fallback) ──
+    # Mount React frontend SPA in production builds.
     frontend_dist = os.path.abspath(
         os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
     )
@@ -220,12 +209,10 @@ def create_app() -> FastAPI:
 
         @app.get("/{fallback_path:path}")
         async def frontend_fallback(fallback_path: str):
-            # Allow API, Gradio, and Health check routes to pass through
+            # Allow API and health check routes to pass through.
             if (
                 fallback_path.startswith("v1/")
                 or fallback_path == "v1"
-                or fallback_path.startswith("ui/")
-                or fallback_path == "ui"
                 or fallback_path == "health"
                 or fallback_path == "invocations"
             ):

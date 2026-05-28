@@ -13,11 +13,13 @@
     "provider": "bedrock_knowledge_base",
     "enabled": true,
     "knowledge_base_ids": [
-      "2KMBSFAGGS",
+      "3EYE4GZYKT",
       "PNPV9G2PF5"
     ],
-    "_comment": "2KMBSFAGGS = public manuals KB, PNPV9G2PF5 = internal guidelines KB",
+    "_comment": "3EYE4GZYKT = isolated processed public/manual chunks KB, PNPV9G2PF5 = internal guidelines KB",
     "reranking_enabled": false,
+    "raw_retrieval_mode": false,
+    "search_type": "HYBRID",
     "citations_required": true
   },
   "memory_profile": {

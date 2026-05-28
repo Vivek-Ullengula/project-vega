@@ -6,6 +6,22 @@ import { uuid } from './uuid'
 export const DEFAULT_AGENT_ID =
   (import.meta.env.VITE_AGENT_ID ?? 'coaction-underwriting').trim() ||
   'coaction-underwriting'
+const AGENT_ID_OVERRIDE_KEY = 'vega_agent_id_override'
+
+export function captureAgentIdOverride(): void {
+  if (typeof window === 'undefined') return
+  const agentId = new URLSearchParams(window.location.search).get('agent_id')?.trim()
+  if (agentId) {
+    window.localStorage.setItem(AGENT_ID_OVERRIDE_KEY, agentId)
+    return
+  }
+  window.localStorage.removeItem(AGENT_ID_OVERRIDE_KEY)
+}
+
+export function getAgentId(): string {
+  if (typeof window === 'undefined') return DEFAULT_AGENT_ID
+  return window.localStorage.getItem(AGENT_ID_OVERRIDE_KEY)?.trim() || DEFAULT_AGENT_ID
+}
 
 export function newSessionId(): string {
   return uuid()
@@ -70,7 +86,7 @@ export async function streamAgentResponse(
   },
   callbacks: StreamAgentCallbacks,
 ): Promise<void> {
-  const response = await fetch(`${getApiBaseUrl()}/agents/${DEFAULT_AGENT_ID}/invoke/stream`, {
+  const response = await fetch(`${getApiBaseUrl()}/agents/${getAgentId()}/invoke/stream`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(body),

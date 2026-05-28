@@ -16,7 +16,7 @@ project-vega/
 ├── entrypoints/         # AgentCore MicroVM listener
 ├── runtime/             # Orchestration pipeline
 ├── services/            # Business logic services
-├── ui/                  # Gradio web interface
+├── frontend/            # React/Vite web interface
 ├── scripts/             # CLI tools & automation
 ├── profiles/            # JSON execution profiles
 ├── config/              # YAML execution profiles
@@ -148,9 +148,9 @@ Uses FastAPI `lifespan` for service initialization:
 4. Initialize `AgentService`
 5. Create `BedrockKBManager`
 6. Wire all routers (`init_auth_router`, `init_session_router`, etc.)
-7. Mount Gradio UI at `/ui`
+7. Mount React SPA from `frontend/dist`
 
-### 7. `ui/gradio_app.py` — Gradio Web Interface
+### 7. `frontend/` — React Web Interface
 
 Features:
 - **Auth flow**: Signup → email verification → Login (all via Cognito APIs)
@@ -187,7 +187,7 @@ Lean event listener for native Bedrock AgentCore Runtime. Receives payloads, cre
 ## Data Flow: Agent Invocation
 
 ```
-User clicks "Send" in Gradio UI
+User clicks "Send" in the React UI
   │
   ▼
 POST /v1/agents/coaction-underwriting/invoke

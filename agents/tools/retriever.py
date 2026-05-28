@@ -9,8 +9,6 @@ import os
 import re
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 import boto3
@@ -93,173 +91,6 @@ _CONTEXT_FOLLOWUP_DIRECTIVE_TOKENS = {
     "yes",
 }
 
-_SOLAR_PANEL_QUERY_TERMS = (
-    "solar panel",
-    "solar panels",
-    "photovoltaic panel",
-    "photovoltaic panels",
-    "pv panel",
-    "pv panels",
-)
-_PROPERTY_SECTION_HEADINGS = (
-    "Appetite",
-    "Applications",
-    "Business Income",
-    "CAT Exposed Property Wind and Hail Availability and Deductibles",
-    "Causes of Loss",
-    "Claims and Losses",
-    "Class Occupancies and Minimum Premiums",
-    "Class Specific Form Requirements",
-    "Coastline Map",
-    "Construction Type",
-    "Deductibles",
-    "Fire Resistive",
-    "Frame",
-    "GA Code Title 33 Chapter 32-11",
-    "Inspections",
-    "Joisted Masonry",
-    "Limit Authority",
-    "Masonry Non-Combustible",
-    "Modified Fire Resistive",
-    "Non-Combustible",
-    "Optional Coverages",
-    "Premium Modification",
-    "Prohibited",
-    "Solar Panels",
-    "Triple Net Lease",
-    "Vacant Buildings",
-    "Valuation",
-    "Wildfire Guide",
-)
-_PROPERTY_SECTION_QUERY_HINTS = {
-    "Appetite": (
-        "Coaction Specialty market package and monoline property business Building "
-        "Business Personal Property Business Income Tenant Improvements occupants GL appetite"
-    ),
-    "Applications": (
-        "New Business current ACORD 140 application Renewals updated application every three years "
-        "material change exposure Addition of property midterm new application location"
-    ),
-    "Business Income": (
-        "market for Business Income with and without Extra Expense cannot be written standalone "
-        "must be 50% or less than total TIV at each location exceptions Coaction underwriter"
-    ),
-    "CAT Exposed Property Wind and Hail Availability and Deductibles": (
-        "CAT allocation letter wind authority Coaction online mandatory wind and hail deductible "
-        "by location broader coverage refer Coaction underwriter"
-    ),
-    "Causes of Loss": (
-        "Basic Broad Special causes of loss available Special Coverage building last 35 years "
-        "updated Electrical Plumbing Roofing last 25 years buildings over 100 years approval "
-        "Theft coverage Central Station Alarm CP 1211 BR-1"
-    ),
-    "Claims and Losses": (
-        "Three years currently valued loss runs required at binding open claim loss over 10000 "
-        "more than one loss requires Coaction underwriter approval"
-    ),
-    "Class Occupancies and Minimum Premiums": (
-        "property class codes General Liability and Property Guideline acceptability occupancy "
-        "minimum premium BPP only apartments mercantile hotels vacant building warehouse"
-    ),
-    "Class Specific Form Requirements": (
-        "Tenant occupancies cooking exposure restaurant bar tavern attach CP0411 select P-5 "
-        "Automatic Commercial Cooking Exhaust Extinguishing System carpentry woodworking P-9 "
-        "dust collection system"
-    ),
-    "Coastline Map": "map of the United States coastline",
-    "Construction Type": "ISO construction codes and definitions",
-    "Deductibles": (
-        "minimum 1000 AOP Deductible required all property risks deductibles over 5000 "
-        "require Coaction underwriter approval"
-    ),
-    "Fire Resistive": (
-        "Exterior walls floors roof fire resistive masonry materials fire resistance rating "
-        "two hours or less"
-    ),
-    "Frame": (
-        "Exterior walls wood combined combustible materials brick veneer stone veneer "
-        "wood iron-clad stucco on wood"
-    ),
-    "GA Code Title 33 Chapter 32-11": (
-        "policies effective 3/1/2025 premium credit Georgia property risks Insurance Institute "
-        "Business and Home Safety Fortified Programs certificate eligibility"
-    ),
-    "Inspections": (
-        "Physical inspections required all buildings TIV one location over 250000 "
-        "minimum every three years changes in location addition of buildings locations"
-    ),
-    "Joisted Masonry": (
-        "Exterior walls masonry adobe brick concrete gypsum block hollow concrete block stone tile "
-        "building floors roof combustible"
-    ),
-    "Limit Authority": (
-        "Per Location TIV Authority 2000000 Per Policy TIV Authority 4000000 max number buildings "
-        "one policy 15 buildings 100 feet apart one location max TIV"
-    ),
-    "Masonry Non-Combustible": (
-        "Exterior walls masonry materials adobe brick concrete gypsum block hollow concrete block "
-        "stone tile floors roof metal non-combustible"
-    ),
-    "Modified Fire Resistive": (
-        "Exterior walls floors roof masonry fire resistive material fire resistance rating "
-        "one hour or more less than two hours"
-    ),
-    "Non-Combustible": (
-        "Exterior walls supports flooring roofs non-combustible metal asbestos gypsum materials"
-    ),
-    "Optional Coverages": (
-        "Loss Payable Provision Ordinance or Law Outdoor Signs Property Extension Spoilage Coverage "
-        "Sprinkler Leakage Theft and Vandalism Sublimit Roof Exclusion Named Storm Deductible "
-        "Water Damage Sublimit Limitations Roof Surfacing"
-    ),
-    "Premium Modification": (
-        "Debits increases Minimum Premium within authority Credits lowering Minimum Premium "
-        "require Coaction underwriter approval"
-    ),
-    "Prohibited": (
-        "Abortion Clinics Agreed Value Airplane Hangars aluminum knob tube pigtailed wiring "
-        "Apartment risks NY NJ blanket limits buildings over 4 stories cannabis fuses galvanized "
-        "plumbing high wildfire lava zones protection class 9 10 structural renovations"
-    ),
-    "Solar Panels": "Solar Panels attached building include values building limit",
-    "Triple Net Lease": (
-        "Buildings with triple net lease referred Coaction underwriter attach form CP 12 19 "
-        "Additional Insured Building Owner"
-    ),
-    "Vacant Buildings": (
-        "Buildings continuously vacant for more than 24-months structural renovations "
-        "Vacant Buildings in CA prohibited"
-    ),
-    "Valuation": (
-        "ACV RCV valuations available Coaction Online RCV risks qualify Special Coverage "
-        "buildings meet TIV requirements valuation discrepancies referred Coaction underwriter"
-    ),
-    "Wildfire Guide": (
-        "Risk meter reports required West Coast property exposures High Very High Wildfire "
-        "HazardHub score D F West Coast states active wildfire 50 miles prohibited"
-    ),
-}
-_GL_GUIDE_FORM_SECTION_HINT = (
-    "General Liability Guide Manual SOURCE_URL: guide.html "
-    "SECTION: Additional Insured and Coverage Options "
-    "# Additional Insured and Coverage Options Coverage Options Pricing Rules"
-)
-_FORM_TITLE_HINTS = {
-    "CG2294": (
-        "Exclusion Damage to Work Performed By Subcontractors On Your Behalf "
-        "contractors credit 91580"
-    ),
-    "GL2294": (
-        "Exclusion Damage to Work Performed By Subcontractors On Your Behalf "
-        "contractors credit 91580"
-    ),
-}
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_LOCAL_PUBLIC_MANUAL_DIRS = (
-    _PROJECT_ROOT / "data" / "property_sections",
-    _PROJECT_ROOT / "data" / "guide_sections",
-    _PROJECT_ROOT / "data" / "full_manuals",
-)
 PROPERTY_MANUAL_URL = "https://bindingauthority.coactionspecialty.com/manuals/property.html"
 GL_GUIDE_MANUAL_URL = "https://bindingauthority.coactionspecialty.com/manuals/guide.html"
 
@@ -398,6 +229,8 @@ class RetrieverConfig:
     reranking_enabled: bool = True
     top_k: int = 5
     current_query: str | None = None
+    raw_retrieval_mode: bool = False
+    search_type: str = "HYBRID"
 
 
 def _get_bedrock_client(region: str):
@@ -416,11 +249,6 @@ def _active_config() -> RetrieverConfig | None:
     return _retriever_config.get() or _default_retriever_config
 
 
-def _local_manual_fallback_enabled() -> bool:
-    value = os.getenv("VEGA_LOCAL_MANUAL_FALLBACK", "0").strip().lower()
-    return value in {"1", "true", "yes", "on"}
-
-
 def _reranking_enabled(requested: bool) -> bool:
     # Default to disabled because the deployed role currently lacks bedrock:Rerank.
     # Set VEGA_RERANKING_ENABLED=1 only after the IAM policy is updated.
@@ -433,6 +261,8 @@ def configure_retriever(
     region: str = "us-east-1",
     reranking_enabled: bool = True,
     top_k: int = 5,
+    raw_retrieval_mode: bool = False,
+    search_type: str = "HYBRID",
 ) -> None:
     """Configure the retriever with KB IDs from an ExecutionProfile."""
     global _default_retriever_config
@@ -442,6 +272,8 @@ def configure_retriever(
         region=region,
         reranking_enabled=effective_reranking_enabled,
         top_k=_clamp_top_k(top_k),
+        raw_retrieval_mode=raw_retrieval_mode,
+        search_type=search_type.upper(),
     )
     _get_bedrock_client(region)
     logger.info(
@@ -450,6 +282,8 @@ def configure_retriever(
         region=region,
         reranking_enabled=effective_reranking_enabled,
         top_k=_clamp_top_k(top_k),
+        raw_retrieval_mode=raw_retrieval_mode,
+        search_type=search_type.upper(),
     )
 
 
@@ -459,6 +293,8 @@ def set_retriever_context(
     reranking_enabled: bool = True,
     top_k: int = 5,
     current_query: str | None = None,
+    raw_retrieval_mode: bool = False,
+    search_type: str = "HYBRID",
 ) -> Token:
     """Set request-local retriever config and return a token for reset."""
     return _retriever_config.set(
@@ -468,6 +304,8 @@ def set_retriever_context(
             reranking_enabled=_reranking_enabled(reranking_enabled),
             top_k=_clamp_top_k(top_k),
             current_query=current_query,
+            raw_retrieval_mode=raw_retrieval_mode,
+            search_type=search_type.upper(),
         )
     )
 
@@ -651,18 +489,6 @@ def _extract_form_references(value: str) -> set[str]:
     return references
 
 
-def _compact_form_reference(value: str) -> str:
-    return re.sub(r"[^A-Z0-9]+", "", value.upper())
-
-
-def _is_gl_guide_form_reference(value: str) -> bool:
-    return _compact_form_reference(value).startswith(("CG", "GL", "IL"))
-
-
-def _form_title_hint(value: str) -> str:
-    return _FORM_TITLE_HINTS.get(_compact_form_reference(value), "")
-
-
 def _singularize_token(token: str) -> str:
     if token.endswith("s") and len(token) > 4:
         return token[:-1]
@@ -689,34 +515,6 @@ def _important_query_phrases(query: str) -> set[str]:
         for idx in range(0, len(words) - phrase_len + 1):
             phrases.add(" ".join(words[idx : idx + phrase_len]))
     return phrases
-
-
-def _mentions_solar_panels(query_lower: str) -> bool:
-    return any(term in query_lower for term in _SOLAR_PANEL_QUERY_TERMS) or bool(
-        re.search(r"\bpv\b", query_lower)
-    )
-
-
-def _matching_property_section_headings(query: str) -> list[str]:
-    """Return known Property section headings explicitly referenced by a query."""
-    query_tokens = _search_tokens(query)
-    if not query_tokens:
-        return []
-
-    query_norm = _normalize_search_text(query)
-    matches = []
-    for heading in _PROPERTY_SECTION_HEADINGS:
-        heading_norm = _normalize_search_text(heading)
-        heading_tokens = _search_tokens(heading)
-        if not heading_tokens:
-            continue
-        if heading_norm in query_norm or heading_tokens <= query_tokens:
-            matches.append(heading)
-            continue
-        if "property" in query_tokens and query_tokens <= heading_tokens | {"property", "manual"}:
-            matches.append(heading)
-
-    return matches
 
 
 def _is_context_dependent_followup(query: str) -> bool:
@@ -761,12 +559,6 @@ def _lexical_match_score(query: str, content: str, heading: str | None = None) -
     if query_tokens:
         score += len(query_tokens & _search_tokens(heading_text)) * 3
         score += len(query_tokens & _search_tokens(content))
-
-    query_lower = query.lower()
-    if _mentions_solar_panels(query_lower) and (
-        "solar panel" in haystack_norm or "photovoltaic panel" in haystack_norm
-    ):
-        score += 10
 
     haystack_compact = _compact_search_text(haystack_norm)
     for form_reference in _extract_form_references(query.upper()):
@@ -885,67 +677,6 @@ def _first_markdown_heading(content: str) -> str:
     return _clean_heading_candidate(header_match.group(1))
 
 
-def _markdown_heading_parts(line: str) -> tuple[int, str] | None:
-    match = re.match(r"^(#{1,6})\s*(.+?)\s*$", line.strip())
-    if not match:
-        return None
-    heading = _clean_heading_candidate(match.group(2))
-    if not heading:
-        return None
-    return len(match.group(1)), heading
-
-
-def _extract_markdown_section(content: str, heading: str) -> str:
-    """Extract a named markdown section from a larger retrieved chunk when present."""
-    heading_norm = _normalize_search_text(heading)
-    if not heading_norm:
-        return ""
-
-    lines = content.splitlines()
-    start_idx = None
-    start_level = None
-    for idx, line in enumerate(lines):
-        parts = _markdown_heading_parts(line)
-        if not parts:
-            continue
-        level, candidate = parts
-        if _normalize_search_text(candidate) == heading_norm:
-            start_idx = idx
-            start_level = level
-            break
-
-    if start_idx is None or start_level is None:
-        return ""
-
-    end_idx = len(lines)
-    for idx in range(start_idx + 1, len(lines)):
-        parts = _markdown_heading_parts(lines[idx])
-        if parts and parts[0] <= start_level:
-            end_idx = idx
-            break
-
-    return "\n".join(lines[start_idx:end_idx]).strip()
-
-
-def _refine_property_section_content(
-    *,
-    original_query: str,
-    clean_content: str,
-    chunk_meta: dict,
-) -> tuple[str, dict]:
-    """Narrow whole-property chunks to the requested side-heading section."""
-    if _manual_family_from_meta(chunk_meta) != "Property":
-        return clean_content, chunk_meta
-
-    for heading in _matching_property_section_headings(original_query):
-        extracted = _extract_markdown_section(clean_content, heading)
-        if extracted:
-            refined_meta = {**chunk_meta, "heading": heading}
-            return extracted, refined_meta
-
-    return clean_content, chunk_meta
-
-
 def _public_source_key(chunk_meta: dict) -> str:
     """Identify a public source at section granularity, not just URL granularity."""
     return "|".join(
@@ -960,7 +691,7 @@ def _public_source_key(chunk_meta: dict) -> str:
 def _build_search_queries(
     tool_query: str, current_query: str | None = None
 ) -> list[tuple[str, str]]:
-    """Build deterministic retrieval queries from tool input and the current user turn."""
+    """Build a small set of retrieval queries from the model tool call and current turn."""
     query_pairs: list[tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -974,53 +705,22 @@ def _build_search_queries(
             seen.add(normalized)
             query_pairs.append((label, expanded_query))
 
-    for label, raw_query in (("tool", tool_query), ("current", current_query or "")):
-        add_query(label, raw_query)
-
-    for raw_query in (current_query or "", tool_query):
-        for form_reference in sorted(_extract_form_references(raw_query.upper())):
-            add_query(
-                "form_exact",
-                f"{form_reference} form endorsement policy form coverage option pricing rules",
-            )
-            if _is_gl_guide_form_reference(form_reference):
-                add_query(
-                    "gl_guide_form_exact",
-                    (
-                        f"{_GL_GUIDE_FORM_SECTION_HINT} {form_reference} "
-                        f"{_form_title_hint(form_reference)}"
-                    ),
-                )
-
-    if _mentions_solar_panels(f"{tool_query} {current_query or ''}".lower()):
-        add_query(
-            "solar_exact",
-            "Solar Panels photovoltaic panels attached building include values building limit",
-        )
-
-    combined_query = f"{tool_query} {current_query or ''}"
-    for heading in _matching_property_section_headings(combined_query):
-        add_query(
-            "property_section_exact",
-            (
-                "Property Manual MANUAL_TYPE: Property SOURCE_URL: property.html "
-                f"SECTION: {heading} # {heading} {_PROPERTY_SECTION_QUERY_HINTS.get(heading, '')}"
-            ),
-        )
+    add_query("ranking", _build_ranking_query(tool_query, current_query))
+    add_query("tool", tool_query)
+    add_query("current", current_query or "")
 
     return query_pairs
 
 
 def _build_ranking_query(tool_query: str, current_query: str | None = None) -> str:
-    """Choose the query used to rank merged KB and fallback results."""
+    """Choose the query used to rank merged KB results."""
     current_query = (current_query or "").strip()
     tool_query = tool_query.strip()
     if not current_query:
         return tool_query
 
     has_explicit_current_key = bool(
-        _extract_form_references(current_query.upper())
-        or re.search(r"\b(class\s*code\s*)?\d{4,}\b", current_query, flags=re.IGNORECASE)
+        re.search(r"\b(class\s*code\s*)?\d{4,}\b", current_query, flags=re.IGNORECASE)
         or re.search(
             r"\b(GL|CG|BP|CP|IL)\b",
             current_query,
@@ -1052,13 +752,11 @@ def _requested_manual_family(query: str) -> str | None:
     ):
         return "General Liability"
 
-    if _matching_property_section_headings(query):
-        return "Property"
-
     if any(
         signal in query_lower
         for signal in (
             " property manual ",
+            " property ",
             " from property ",
             " in property ",
             " for property ",
@@ -1072,125 +770,57 @@ def _requested_manual_family(query: str) -> str | None:
 
 def _manual_family_from_meta(chunk_meta: dict) -> str | None:
     manual_name = str(chunk_meta.get("manual_name") or "").lower()
-    if "property" in manual_name:
+    manual_type = str(chunk_meta.get("manual_type") or "").lower()
+    combined = f"{manual_name} {manual_type}"
+    if "property" in combined:
         return "Property"
-    if "general liability" in manual_name or "guide" in manual_name:
+    if "general liability" in combined or "guide" in combined:
         return "General Liability"
     return None
 
 
 def _expand_query(query: str) -> str:
-    """Expand shorthand terms and eligibility keywords.
-
-    Applies context-aware expansion:
-    - Property coverage feature queries → property-specific terms (not GL class codes)
-    - Age eligibility queries → normalized age terms
-    - Named coverage features → exact feature name emphasis
-    - General eligibility queries → class code terms
-    """
+    """Expand common shorthand without steering toward hand-picked sections."""
     search_query = query
+    query_lower = query.lower()
     shorthand_map = {
         "paper": "paperhanging",
         "hnoa": "hired and non-owned auto",
         "ebl": "employee benefits liability",
+        "pv": "photovoltaic",
         "tria": "terrorism risk insurance",
         "bor": "broker of record",
     }
-    query_lower = query.lower()
     for short, full in shorthand_map.items():
-        if short in query_lower and full not in query_lower:
+        if re.search(rf"\b{re.escape(short)}\b", query_lower) and full not in query_lower:
             search_query = f"{search_query} {full}"
-
-    if re.search(r"\bpv\b", query_lower) and "photovoltaic" not in query_lower:
-        search_query = f"{search_query} photovoltaic solar panels"
-
-    if _mentions_solar_panels(query_lower):
-        search_query = (
-            f"{search_query} Solar Panels photovoltaic panels attached building "
-            "include values building limit Property Manual"
-        )
 
     form_references = _extract_form_references(query.upper())
     if form_references:
-        form_terms = ["form", "endorsement", "policy form", "class-specific forms", "purpose"]
+        form_terms = ["form", "endorsement", "policy form", "coverage option"]
         form_terms.extend(sorted(form_references))
-        form_terms.extend(
-            hint
-            for form_reference in sorted(form_references)
-            if (hint := _form_title_hint(form_reference))
-        )
         search_query = f"{search_query} {' '.join(dict.fromkeys(form_terms))}"
 
-    # --- Property coverage feature detection ---
-    # Questions like "Do you provide coverage for fences?" are about Property
-    # coverage features, NOT GL class codes. Route accordingly.
-    property_feature_items = [
-        "fence",
-        "outdoor property",
-        "equipment",
-        "inland marine",
-        "property in the open",
-        "builder",
-        "property extension",
-        "solar panel",
-        "solar panels",
-        "photovoltaic panel",
-        "photovoltaic panels",
-        "pv panel",
-        "pv panels",
-    ]
-    coverage_verbs = [
-        "coverage for",
-        "cover for",
-        "provide coverage",
-        "offer property",
-        "include",
-        "included",
-        "building limit",
-    ]
-    has_property_feature = any(item in query_lower for item in property_feature_items)
-    is_property_feature = has_property_feature and (
-        any(verb in query_lower for verb in coverage_verbs)
-        or "property" in query_lower
-        or _mentions_solar_panels(query_lower)
-    )
-
-    # --- Age eligibility normalization ---
-    age_match = re.search(r"(\d+)\s*(year|yr)s?\s*old", query_lower)
-    has_age_query = age_match or "age of" in query_lower or "year built" in query_lower
-    if has_age_query:
+    if re.search(r"(\d+)\s*(year|yr)s?\s*old", query_lower) or any(
+        phrase in query_lower for phrase in ("age of", "year built")
+    ):
         search_query = f"{search_query} building age eligibility year built restriction"
 
-    # --- Named coverage features ---
-    named_features = [
+    for feature in (
         "extended period of indemnity",
         "builders risk",
         "agreed value",
         "ordinance or law",
         "contractor pak",
         "inland marine pac",
-    ]
-    for feature in named_features:
+    ):
         if feature in query_lower:
             search_query = f"{search_query} coverage option {feature}"
             break
 
-    # --- Eligibility expansion ---
-    eligibility_keywords = [
-        "acceptable",
-        "eligible",
-        "appetite",
-        "suitability",
-        "cover",
-        "prohibited",
-    ]
-    if any(k in query_lower for k in eligibility_keywords):
-        if is_property_feature:
-            # Property feature queries → steer toward property extensions
-            search_query = f"{search_query} property extension coverage option included"
-        else:
-            # Business eligibility queries → steer toward GL class codes
-            search_query = f"{search_query} class code prohibited submit requirements eligibility"
+    if any(k in query_lower for k in ("eligible", "appetite", "prohibited", "submit")):
+        search_query = f"{search_query} prohibited submit requirements eligibility"
+
     return search_query
 
 
@@ -1208,7 +838,16 @@ def _extract_chunk_metadata(content: str, metadata: dict, s3_uri: str) -> dict:
         url = s3_uri or "N/A"
 
     manual_type_match = re.search(r"^MANUAL_TYPE:\s*(.+)", content, re.MULTILINE)
-    manual_type = manual_type_match.group(1).strip() if manual_type_match else None
+    manual_type = (
+        manual_type_match.group(1).strip()
+        if manual_type_match
+        else (
+            metadata.get("manual_type")
+            or metadata.get("manualType")
+            or metadata.get("MANUAL_TYPE")
+            or None
+        )
+    )
 
     injected_code_match = re.search(r"^CLASS_CODE:\s*(\d+)", content, re.MULTILINE)
     section_match = re.search(r"^SECTION:\s*(.+)", content, re.MULTILINE)
@@ -1239,7 +878,9 @@ def _extract_chunk_metadata(content: str, metadata: dict, s3_uri: str) -> dict:
         elif filename.isdigit():
             class_code = filename
 
-    if manual_type:
+    if manual_type and "internal" in manual_type.lower():
+        manual_name = "Internal Guidelines"
+    elif manual_type:
         manual_name = f"{manual_type} Manual"
     elif "internal-docs/" in s3_uri:
         manual_name = "Internal Guidelines"
@@ -1254,114 +895,9 @@ def _extract_chunk_metadata(content: str, metadata: dict, s3_uri: str) -> dict:
         "url": url,
         "heading": heading,
         "manual_name": manual_name,
+        "manual_type": manual_type,
         "class_code": class_code,
     }
-
-
-@lru_cache(maxsize=1)
-def _load_local_public_manual_sections() -> tuple[dict, ...]:
-    """Load synced public manual files as a deterministic fallback when enabled."""
-    sections = []
-    for directory in _LOCAL_PUBLIC_MANUAL_DIRS:
-        if not directory.exists():
-            continue
-        for path in sorted(directory.glob("*.md")):
-            try:
-                content = path.read_text(encoding="utf-8")
-            except OSError as exc:
-                logger.warning("local_manual_section_read_failed", path=str(path), error=str(exc))
-                continue
-
-            local_uri = f"local://{directory.name}/{path.name}"
-            chunk_meta = _extract_chunk_metadata(
-                content,
-                {"source_url": local_uri},
-                local_uri,
-            )
-            sections.append(
-                {
-                    "content": content,
-                    "heading": chunk_meta.get("heading") or path.stem.replace("_", " ").title(),
-                    "source_key": _public_source_key(chunk_meta),
-                    "local_uri": local_uri,
-                }
-            )
-
-    return tuple(sections)
-
-
-def _result_source_key(result: dict) -> str:
-    content = result.get("content", {}).get("text", "")
-    metadata = result.get("metadata", {})
-    s3_uri = _result_source_uri(result)
-    return _public_source_key(_extract_chunk_metadata(content, metadata, s3_uri))
-
-
-def _local_public_manual_section_results(
-    query: str,
-    existing_results: list[dict],
-    limit: int,
-) -> list[dict]:
-    """Return local public manual sections that lexically match the query."""
-    if not _local_manual_fallback_enabled():
-        return []
-
-    existing_source_keys = {_result_source_key(result) for result in existing_results}
-    ranked_sections = []
-    for section in _load_local_public_manual_sections():
-        if section["source_key"] in existing_source_keys:
-            continue
-        lexical_score = _lexical_match_score(
-            query,
-            str(section["content"]),
-            str(section["heading"]),
-        )
-        if lexical_score <= 0:
-            continue
-        ranked_sections.append((lexical_score, str(section["heading"]), section))
-
-    if not ranked_sections:
-        return []
-
-    ranked_sections.sort(key=lambda item: (-item[0], item[1]))
-    selected = ranked_sections[: max(1, limit)]
-    return [
-        {
-            "content": {"text": str(section["content"])},
-            "metadata": {
-                "source_url": str(section["local_uri"]),
-                "vega_local_public_manual_fallback": True,
-            },
-            "score": 1,
-        }
-        for _, _, section in selected
-    ]
-
-
-def _augment_with_local_public_manual_sections(
-    results: list[dict],
-    query: str,
-    limit: int,
-) -> list[dict]:
-    """Supplement KB results with local synced public manual matches when enabled."""
-    local_results = _local_public_manual_section_results(query, results, limit)
-    if not local_results:
-        return results
-
-    logger.info(
-        "local_public_manual_sections_added",
-        count=len(local_results),
-        enabled=_local_manual_fallback_enabled(),
-        sections=[
-            _extract_chunk_metadata(
-                result.get("content", {}).get("text", ""),
-                result.get("metadata", {}),
-                _result_source_uri(result),
-            ).get("heading")
-            for result in local_results
-        ],
-    )
-    return [*results, *local_results]
 
 
 def _format_retrieved_documents(
@@ -1394,34 +930,6 @@ def _format_retrieved_documents(
                 family_results.append(res)
         if family_results:
             candidate_results = family_results
-
-    requested_property_headings = _matching_property_section_headings(original_query)
-    if requested_property_headings:
-        requested_heading_norms = {
-            _normalize_search_text(heading) for heading in requested_property_headings
-        }
-        section_results = []
-        for res in candidate_results:
-            metadata = res.get("metadata", {})
-            content = res.get("content", {}).get("text", "")
-            s3_uri = _result_source_uri(res)
-            chunk_meta = _extract_chunk_metadata(content, metadata, s3_uri)
-            clean_content = re.sub(
-                r"^(SOURCE_URL|CLASS_CODE|MANUAL_TYPE|SECTION):.*\n?",
-                "",
-                content,
-                flags=re.MULTILINE,
-            ).strip()
-            clean_content = re.sub(r"^---\s*\n", "", clean_content).strip()
-            _, refined_meta = _refine_property_section_content(
-                original_query=original_query,
-                clean_content=clean_content,
-                chunk_meta=chunk_meta,
-            )
-            if _normalize_search_text(refined_meta.get("heading") or "") in requested_heading_norms:
-                section_results.append(res)
-        if section_results:
-            candidate_results = section_results
 
     def result_lexical_score(res: dict) -> int:
         metadata = res.get("metadata", {})
@@ -1481,13 +989,8 @@ def _format_retrieved_documents(
             r"^(SOURCE_URL|CLASS_CODE|MANUAL_TYPE|SECTION):.*\n?", "", content, flags=re.MULTILINE
         ).strip()
         clean_content = re.sub(r"^---\s*\n", "", clean_content).strip()
-        clean_content, chunk_meta = _refine_property_section_content(
-            original_query=original_query,
-            clean_content=clean_content,
-            chunk_meta=chunk_meta,
-        )
 
-        is_internal = chunk_meta["manual_name"] == "Internal Guidelines"
+        is_internal = "internal" in str(chunk_meta["manual_name"]).lower()
         if is_internal:
             source_id = "INTERNAL_DO_NOT_CITE"
         else:
@@ -1539,6 +1042,59 @@ def _format_retrieved_documents(
     return "\n\n".join(context_parts), source_metadata
 
 
+def _format_raw_retrieved_documents(
+    results: list,
+    max_results: int | None = None,
+) -> tuple[str, list[dict]]:
+    """Format retrieved chunks without app-side ranking/filtering helpers."""
+    limited_results = results[: _clamp_top_k(max_results)] if max_results is not None else results
+    context_parts = []
+    source_metadata = []
+    source_key_to_id: dict[str, str] = {}
+    seen_source_keys: set[str] = set()
+
+    for res in limited_results:
+        content = res.get("content", {}).get("text", "")
+        metadata = res.get("metadata", {})
+        s3_uri = _result_source_uri(res)
+        chunk_meta = _extract_chunk_metadata(content, metadata, s3_uri)
+        is_internal = "internal" in str(chunk_meta["manual_name"]).lower()
+
+        if is_internal:
+            source_id = "INTERNAL_DO_NOT_CITE"
+        else:
+            source_key = _public_source_key(chunk_meta)
+            source_key_to_id.setdefault(source_key, f"S{len(source_key_to_id) + 1}")
+            source_id = source_key_to_id[source_key]
+            chunk_meta["source_id"] = source_id
+
+        chunk_meta["content_text"] = content
+        context_parts.append(
+            "\n".join(
+                [
+                    f"Citation ID: {source_id}",
+                    f"Source URL: {chunk_meta['url'] if not is_internal else 'INTERNAL'}",
+                    f"Manual: {chunk_meta['manual_name']}",
+                    f"Heading: {chunk_meta['heading']}",
+                    f"Class Code: {chunk_meta.get('class_code') or 'N/A'}",
+                    f"Retrieval Score: {_retrieval_score(res)}",
+                    f"Content:\n{content}",
+                ]
+            )
+        )
+
+        if not is_internal:
+            source_key = _public_source_key(chunk_meta)
+            if source_key not in seen_source_keys:
+                seen_source_keys.add(source_key)
+                source_metadata.append(chunk_meta)
+
+    if not context_parts:
+        return "No relevant information found in the manuals.", []
+
+    return "\n\n".join(context_parts), source_metadata
+
+
 # ── Strands Tool ─────────────────────────────────────────────────────────
 
 
@@ -1548,24 +1104,37 @@ def _retrieve_manual_context(query: str, config: RetrieverConfig | None) -> tupl
         return "Error: Retriever not configured. No Knowledge Base IDs available.", []
 
     try:
-        ranking_query = _build_ranking_query(query, config.current_query)
-        search_queries = _build_search_queries(query, config.current_query)
+        ranking_query = query if config.raw_retrieval_mode else _build_ranking_query(
+            query, config.current_query
+        )
+        search_queries = (
+            [("tool", query.strip())]
+            if config.raw_retrieval_mode
+            else _build_search_queries(query, config.current_query)
+        )
         all_results: list[dict] = []
         bedrock_client = _get_bedrock_client(config.region)
         top_k = _clamp_top_k(config.top_k)
-        candidate_count = max(top_k * 4, top_k)
+        candidate_count = top_k if config.raw_retrieval_mode else max(top_k * 4, top_k)
+        search_type = config.search_type.upper()
+        if search_type not in {"HYBRID", "SEMANTIC"}:
+            search_type = "HYBRID"
 
         # Query all configured KBs and merge results
         for kb_id in config.knowledge_base_ids:
             for query_label, search_query in search_queries:
+                if not search_query:
+                    continue
                 try:
                     # 1. Build the vector search configuration block
                     vector_config = {
                         "numberOfResults": candidate_count,
-                        "overrideSearchType": "HYBRID",
+                        "overrideSearchType": search_type,
                     }
                     reranking_allowed = (
-                        config.reranking_enabled and kb_id not in _rerank_disabled_kb_ids
+                        not config.raw_retrieval_mode
+                        and config.reranking_enabled
+                        and kb_id not in _rerank_disabled_kb_ids
                     )
 
                     # Only add reranking configuration if enabled globally
@@ -1611,7 +1180,7 @@ def _retrieve_manual_context(query: str, config: RetrieverConfig | None) -> tupl
                             )
                             fallback_vector_config = {
                                 "numberOfResults": candidate_count,
-                                "overrideSearchType": "HYBRID",
+                                "overrideSearchType": search_type,
                             }
                             fallback_retrieval_config = {
                                 "vectorSearchConfiguration": fallback_vector_config
@@ -1639,17 +1208,17 @@ def _retrieve_manual_context(query: str, config: RetrieverConfig | None) -> tupl
             kb_count=len(config.knowledge_base_ids),
             top_k=top_k,
             query_count=len(search_queries),
+            raw_retrieval_mode=config.raw_retrieval_mode,
+            search_type=search_type,
         )
-        all_results = _augment_with_local_public_manual_sections(
-            all_results,
-            ranking_query,
-            limit=candidate_count,
-        )
-        context, sources = _format_retrieved_documents(
-            all_results,
-            ranking_query,
-            max_results=top_k,
-        )
+        if config.raw_retrieval_mode:
+            context, sources = _format_raw_retrieved_documents(all_results, max_results=top_k)
+        else:
+            context, sources = _format_retrieved_documents(
+                all_results,
+                ranking_query,
+                max_results=top_k,
+            )
         logger.info(
             "retrieval_context_prepared",
             source_count=len(sources),
@@ -1684,6 +1253,8 @@ def build_scoped_search_manuals_tool(
     top_k: int,
     source_sink: list[dict],
     current_query: str | None = None,
+    raw_retrieval_mode: bool = False,
+    search_type: str = "HYBRID",
 ) -> Any:
     """Create a per-invocation search_manuals tool that writes sources into source_sink."""
     config = RetrieverConfig(
@@ -1692,6 +1263,8 @@ def build_scoped_search_manuals_tool(
         reranking_enabled=_reranking_enabled(reranking_enabled),
         top_k=_clamp_top_k(top_k),
         current_query=current_query,
+        raw_retrieval_mode=raw_retrieval_mode,
+        search_type=search_type.upper(),
     )
 
     @tool(name="search_manuals")

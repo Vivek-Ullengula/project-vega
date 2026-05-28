@@ -1,12 +1,10 @@
 from agents.tools.retriever import (
     RetrieverConfig,
-    _augment_with_local_public_manual_sections,
     _build_ranking_query,
     _build_search_queries,
     _expand_query,
     _extract_form_references,
     _format_retrieved_documents,
-    _matching_property_section_headings,
     _requested_manual_family,
     _reranking_enabled,
     _retrieve_manual_context,
@@ -162,9 +160,7 @@ INTERNAL_INSPECTIONS = """# Binding Authority and Brokerage Light Internal Guide
 def test_expand_query_adds_solar_panel_property_terms():
     expanded = _expand_query("Solar Panels in Property").lower()
 
-    assert "photovoltaic panels" in expanded
-    assert "attached building" in expanded
-    assert "building limit" in expanded
+    assert expanded == "solar panels in property"
 
 
 def test_build_search_queries_includes_tool_query_and_current_user_turn():
@@ -178,58 +174,12 @@ def test_build_search_queries_includes_tool_query_and_current_user_turn():
     assert any("91580" in query for query in expanded_queries)
 
 
-def test_build_search_queries_adds_exact_property_section_heading_hint():
-    queries = _build_search_queries("Wildfire Guide", "Wildfire Guide")
-
-    assert any(
-        label == "property_section_exact" and "SECTION: Wildfire Guide" in query
-        for label, query in queries
-    )
-
-
-def test_build_search_queries_adds_appetite_property_hint():
-    queries = _build_search_queries("Details about Appetite", "Details about Appetite")
-
-    assert any(
-        label == "property_section_exact"
-        and "SECTION: Appetite" in query
-        and "package and monoline property business" in query
-        for label, query in queries
-    )
-
-
-def test_build_search_queries_adds_vacant_buildings_property_hint():
-    queries = _build_search_queries("Vacant building", "Vacant building")
-
-    assert any(
-        label == "property_section_exact"
-        and "SECTION: Vacant Buildings" in query
-        and "continuously vacant" in query
-        for label, query in queries
-    )
-
-
-def test_build_search_queries_adds_inspections_property_hint_for_lob_followup():
-    queries = _build_search_queries("Property", "Inspections Property")
-
-    assert any(
-        label == "property_section_exact"
-        and "SECTION: Inspections" in query
-        and "Physical inspections required" in query
-        for label, query in queries
-    )
-
-
-def test_matching_property_section_headings_detects_known_property_sections():
-    assert _matching_property_section_headings("Tell me about Wildfire Guide") == ["Wildfire Guide"]
-
-
 def test_exact_property_section_heading_requests_property_family():
-    assert _requested_manual_family("Inspections") == "Property"
+    assert _requested_manual_family("Property Inspections") == "Property"
 
 
 def test_exact_property_section_with_extra_words_requests_property_family():
-    assert _requested_manual_family("Details about Appetite") == "Property"
+    assert _requested_manual_family("Details about Property Appetite") == "Property"
 
 
 def test_build_ranking_query_uses_tool_context_for_short_followup():
@@ -281,25 +231,6 @@ def test_expand_query_adds_compact_form_variant_for_spaced_form():
 
     assert "CG2294" in expanded
     assert "CG 2294" in expanded
-
-
-def test_expand_query_adds_known_form_title_hint_for_tricky_forms():
-    expanded = _expand_query("What is CG 2294?")
-
-    assert "Damage to Work Performed By Subcontractors" in expanded
-    assert "contractors credit 91580" in expanded
-
-
-def test_build_search_queries_adds_gl_guide_form_section_hint():
-    queries = _build_search_queries("What is CG 2294?", "What is CG 2294?")
-
-    assert any(
-        label == "gl_guide_form_exact"
-        and "Additional Insured and Coverage Options" in query
-        and "CG 2294" in query
-        and "Damage to Work Performed By Subcontractors" in query
-        for label, query in queries
-    )
 
 
 def test_format_promotes_exact_solar_section_over_generic_property_result():
@@ -381,117 +312,6 @@ def test_format_prefers_property_manual_when_user_explicitly_requests_property()
     assert sources[0]["manual_name"] == "Property Manual"
 
 
-def test_format_extracts_requested_property_side_heading_from_whole_manual_chunk():
-    context, sources = _format_retrieved_documents(
-        [
-            _s3_result(
-                WHOLE_PROPERTY_MANUAL,
-                0.35,
-                "s3://vega-binding-authority/data/bedrock_ingest/property/property.md",
-            ),
-        ],
-        "Vacant building property",
-        max_results=1,
-    )
-
-    assert "Heading: Vacant Buildings" in context
-    assert "# Property Manual" not in context
-    assert "Optional Coverages" not in context
-    assert "Buildings continuously vacant" in context
-    assert sources[0]["heading"] == "Vacant Buildings"
-    assert sources[0]["content_text"].startswith("## Vacant Buildings")
-
-
-def test_format_extracts_inspections_side_heading_from_whole_manual_chunk():
-    context, sources = _format_retrieved_documents(
-        [
-            _s3_result(
-                WHOLE_PROPERTY_MANUAL,
-                0.35,
-                "s3://vega-binding-authority/data/bedrock_ingest/property/property.md",
-            ),
-        ],
-        "Inspections Property",
-        max_results=1,
-    )
-
-    assert "Heading: Inspections" in context
-    assert "Physical inspections are required" in context
-    assert "Optional Coverages" not in context
-    assert sources[0]["heading"] == "Inspections"
-
-
-def test_format_extracts_appetite_side_heading_from_whole_manual_chunk():
-    context, sources = _format_retrieved_documents(
-        [
-            _s3_result(
-                WHOLE_PROPERTY_MANUAL,
-                0.35,
-                "s3://vega-binding-authority/data/bedrock_ingest/property/property.md",
-            ),
-        ],
-        "Details about Appetite",
-        max_results=1,
-    )
-
-    assert "Heading: Appetite" in context
-    assert "package and monoline property business" in context
-    assert "Inspections" not in context
-    assert sources[0]["heading"] == "Appetite"
-
-
-def test_format_prefers_public_property_section_over_internal_for_exact_heading():
-    context, sources = _format_retrieved_documents(
-        [
-            _s3_result(
-                INTERNAL_INSPECTIONS,
-                0.99,
-                "s3://vega-binding-authority/internal-docs/binding-authority.md",
-            ),
-            _s3_result(
-                WHOLE_PROPERTY_MANUAL,
-                0.35,
-                "s3://vega-binding-authority/data/bedrock_ingest/property/property.md",
-            ),
-        ],
-        "Inspections",
-        max_results=1,
-    )
-
-    assert "Manual: Property Manual" in context
-    assert "Heading: Inspections" in context
-    assert "Physical inspections are required" in context
-    assert "Internal Guidelines" not in context
-    assert sources[0]["manual_name"] == "Property Manual"
-
-
-def test_format_prefers_public_property_appetite_over_internal_or_generic_results():
-    context, sources = _format_retrieved_documents(
-        [
-            _s3_result(
-                "# Binding Authority and Brokerage Light Internal Guidelines\n\n# Appetite\n- Internal appetite rules.",
-                0.99,
-                "s3://vega-binding-authority/internal-docs/binding-authority.md",
-            ),
-            _result(OPTIONAL_COVERAGES, 0.8),
-            _s3_result(
-                WHOLE_PROPERTY_MANUAL,
-                0.35,
-                "s3://vega-binding-authority/data/bedrock_ingest/property/property.md",
-            ),
-        ],
-        "Details about Appetite",
-        max_results=1,
-    )
-
-    assert "Manual: Property Manual" in context
-    assert "Heading: Appetite" in context
-    assert "package and monoline property business" in context
-    assert "Internal Guidelines" not in context
-    assert "Optional Coverages" not in context
-    assert sources[0]["heading"] == "Appetite"
-
-
 def test_format_uses_clean_markdown_heading_over_noisy_bedrock_heading_metadata():
     noisy_heading = (
         "Premium Modification Debits and increases in Minimum Premium are within your authority. "
@@ -541,55 +361,6 @@ def test_state_mentions_do_not_mark_prohibited_state_mentions_as_eligible():
     assert "ELIGIBLE (found in document)" not in context
     assert "PRE-COMPUTED STATE ELIGIBILITY" not in context
     assert sources[0]["class_code"] == "60010"
-
-
-def test_local_public_manual_fallback_adds_missing_solar_section_when_enabled(monkeypatch):
-    monkeypatch.setenv("VEGA_LOCAL_MANUAL_FALLBACK", "1")
-
-    augmented = _augment_with_local_public_manual_sections(
-        [_result(OPTIONAL_COVERAGES, 0.95)],
-        "Solar Panels Property",
-        limit=5,
-    )
-
-    assert any("SECTION: Solar Panels" in item["content"]["text"] for item in augmented)
-
-
-def test_local_public_manual_fallback_adds_missing_guide_form_section_when_enabled(
-    monkeypatch,
-):
-    monkeypatch.setenv("VEGA_LOCAL_MANUAL_FALLBACK", "1")
-
-    augmented = _augment_with_local_public_manual_sections(
-        [],
-        "What is CG 22 94?",
-        limit=5,
-    )
-
-    assert any("CG 2294" in item["content"]["text"] for item in augmented)
-
-
-def test_local_public_manual_fallback_is_disabled_by_default(monkeypatch):
-    monkeypatch.delenv("VEGA_LOCAL_MANUAL_FALLBACK", raising=False)
-    augmented = _augment_with_local_public_manual_sections(
-        [],
-        "Solar Panels Property",
-        limit=5,
-    )
-
-    assert augmented == []
-
-
-def test_local_public_manual_fallback_can_be_disabled(monkeypatch):
-    monkeypatch.setenv("VEGA_LOCAL_MANUAL_FALLBACK", "0")
-
-    augmented = _augment_with_local_public_manual_sections(
-        [],
-        "Solar Panels Property",
-        limit=5,
-    )
-
-    assert augmented == []
 
 
 def test_reranking_is_disabled_by_default(monkeypatch):
@@ -655,7 +426,7 @@ def test_format_promotes_guide_form_match_for_spaced_form_query():
     assert sources[0]["manual_name"] == "General Liability Guide Manual"
 
 
-def test_retrieval_uses_gl_guide_form_hint_for_cg_2294(monkeypatch):
+def test_retrieval_uses_form_variants_for_cg_2294(monkeypatch):
     class FakeBedrockClient:
         def __init__(self):
             self.queries = []
@@ -663,7 +434,7 @@ def test_retrieval_uses_gl_guide_form_hint_for_cg_2294(monkeypatch):
         def retrieve(self, **kwargs):
             query_text = kwargs["retrievalQuery"]["text"]
             self.queries.append(query_text)
-            if "Additional Insured and Coverage Options" in query_text:
+            if "CG 22 94" in query_text and "CG 2294" in query_text:
                 return {"retrievalResults": [_result(CG_2294_GUIDE, 0.45)]}
             return {"retrievalResults": []}
 
@@ -683,7 +454,6 @@ def test_retrieval_uses_gl_guide_form_hint_for_cg_2294(monkeypatch):
     )
 
     assert any("CG 22 94" in query for query in fake_client.queries)
-    assert any("Additional Insured and Coverage Options" in query for query in fake_client.queries)
     assert "Heading: Additional Insured and Coverage Options" in context
     assert "CG 2294 - Exclusion" in context
     assert sources[0]["manual_name"] == "General Liability Guide Manual"
@@ -755,7 +525,7 @@ def test_retrieval_keeps_prior_topic_for_context_dependent_property_followup(mon
     assert sources[0]["heading"] == "Triple Net Lease"
 
 
-def test_retrieval_uses_property_section_hint_for_yes_property_followup(monkeypatch):
+def test_retrieval_uses_current_turn_for_property_followup(monkeypatch):
     class FakeBedrockClient:
         def __init__(self):
             self.queries = []
@@ -763,8 +533,21 @@ def test_retrieval_uses_property_section_hint_for_yes_property_followup(monkeypa
         def retrieve(self, **kwargs):
             query_text = kwargs["retrievalQuery"]["text"]
             self.queries.append(query_text)
-            if "SECTION: Inspections" in query_text:
-                return {"retrievalResults": [_result(WHOLE_PROPERTY_MANUAL, 0.35)]}
+            if "Inspections Property" in query_text:
+                return {
+                    "retrievalResults": [
+                        _result(
+                            """SOURCE_URL: https://bindingauthority.coactionspecialty.com/manuals/property.html
+MANUAL_TYPE: Property
+SECTION: Inspections
+---
+# Inspections
+Physical inspections are required on all buildings.
+""",
+                            0.35,
+                        )
+                    ]
+                }
             return {"retrievalResults": []}
 
     fake_client = FakeBedrockClient()
@@ -782,13 +565,13 @@ def test_retrieval_uses_property_section_hint_for_yes_property_followup(monkeypa
         ),
     )
 
-    assert any("SECTION: Inspections" in query for query in fake_client.queries)
+    assert any("Inspections Property" in query for query in fake_client.queries)
     assert "Heading: Inspections" in context
     assert "Physical inspections are required" in context
     assert sources[0]["heading"] == "Inspections"
 
 
-def test_retrieval_prefers_property_inspections_over_internal_match(monkeypatch):
+def test_retrieval_uses_current_turn_for_appetite(monkeypatch):
     class FakeBedrockClient:
         def __init__(self):
             self.queries = []
@@ -796,52 +579,9 @@ def test_retrieval_prefers_property_inspections_over_internal_match(monkeypatch)
         def retrieve(self, **kwargs):
             query_text = kwargs["retrievalQuery"]["text"]
             self.queries.append(query_text)
-            if "SECTION: Inspections" in query_text:
-                return {"retrievalResults": [_result(WHOLE_PROPERTY_MANUAL, 0.35)]}
-            return {
-                "retrievalResults": [
-                    _s3_result(
-                        INTERNAL_INSPECTIONS,
-                        0.99,
-                        "s3://vega-binding-authority/internal-docs/binding-authority.md",
-                    )
-                ]
-            }
-
-    fake_client = FakeBedrockClient()
-    monkeypatch.setattr(
-        "agents.tools.retriever._get_bedrock_client",
-        lambda _region: fake_client,
-    )
-
-    context, sources = _retrieve_manual_context(
-        "Inspections",
-        RetrieverConfig(
-            knowledge_base_ids=("kb-public", "kb-internal"),
-            reranking_enabled=False,
-            current_query="Inspections",
-        ),
-    )
-
-    assert any("SECTION: Inspections" in query for query in fake_client.queries)
-    assert "Manual: Property Manual" in context
-    assert "Heading: Inspections" in context
-    assert "Physical inspections are required" in context
-    assert "Internal Guidelines" not in context
-    assert sources[0]["manual_name"] == "Property Manual"
-
-
-def test_retrieval_uses_property_section_hint_for_appetite(monkeypatch):
-    class FakeBedrockClient:
-        def __init__(self):
-            self.queries = []
-
-        def retrieve(self, **kwargs):
-            query_text = kwargs["retrievalQuery"]["text"]
-            self.queries.append(query_text)
-            if "SECTION: Appetite" in query_text:
+            if "Details about Property Appetite" in query_text:
                 return {"retrievalResults": [_result(APPETITE, 0.35)]}
-            return {"retrievalResults": [_result(OPTIONAL_COVERAGES, 0.8)]}
+            return {"retrievalResults": []}
 
     fake_client = FakeBedrockClient()
     monkeypatch.setattr(
@@ -850,16 +590,65 @@ def test_retrieval_uses_property_section_hint_for_appetite(monkeypatch):
     )
 
     context, sources = _retrieve_manual_context(
-        "Details about Appetite",
+        "Property",
         RetrieverConfig(
             knowledge_base_ids=("kb-public",),
             reranking_enabled=False,
-            current_query="Details about Appetite",
+            current_query="Details about Property Appetite",
         ),
     )
 
-    assert any("SECTION: Appetite" in query for query in fake_client.queries)
+    assert any("Details about Property Appetite" in query for query in fake_client.queries)
     assert "Heading: Appetite" in context
     assert "package and monoline property business" in context
     assert "Optional Coverages" not in context
     assert sources[0]["heading"] == "Appetite"
+
+
+def test_raw_retrieval_mode_uses_exact_query_without_app_helpers(monkeypatch):
+    class FakeBedrockClient:
+        def __init__(self):
+            self.calls = []
+
+        def retrieve(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"retrievalResults": [_result(SOLAR_PANELS, 0.9)]}
+
+    fake_client = FakeBedrockClient()
+    monkeypatch.setattr(
+        "agents.tools.retriever._get_bedrock_client",
+        lambda _region: fake_client,
+    )
+
+    context, sources = _retrieve_manual_context(
+        "Solar Panels",
+        RetrieverConfig(
+            knowledge_base_ids=("kb-public", "kb-internal"),
+            reranking_enabled=False,
+            current_query="Should the value of solar panels be included in the building limit?",
+            raw_retrieval_mode=True,
+            search_type="HYBRID",
+            top_k=5,
+        ),
+    )
+
+    assert [call["retrievalQuery"]["text"] for call in fake_client.calls] == [
+        "Solar Panels",
+        "Solar Panels",
+    ]
+    assert all(
+        call["retrievalConfiguration"]["vectorSearchConfiguration"]["numberOfResults"] == 5
+        for call in fake_client.calls
+    )
+    assert all(
+        call["retrievalConfiguration"]["vectorSearchConfiguration"]["overrideSearchType"]
+        == "HYBRID"
+        for call in fake_client.calls
+    )
+    assert all(
+        "rerankingConfiguration"
+        not in call["retrievalConfiguration"]["vectorSearchConfiguration"]
+        for call in fake_client.calls
+    )
+    assert "Solar Panels" in context
+    assert sources[0]["heading"] == "Solar Panels"

@@ -35,7 +35,7 @@ The platform uses a **dual-ingress** pattern with shared runtime logic:
 │  │   ├── /v1/agents/*/invoke  └── entrypoints/agent_gateway.py   │   │
 │  │   ├── /v1/sessions/*                                          │   │
 │  │   ├── /v1/knowledge-bases/*                                   │   │
-│  │   └── /ui (Gradio)                                            │   │
+│  │   └── /login (React SPA)                                      │   │
 │  └───────┬────────────────────────────────────────────┬──────────┘   │
 │          │                                            │              │
 │  ┌───────▼────────────────────────────────────────────▼──────────┐   │
@@ -54,7 +54,7 @@ The platform uses a **dual-ingress** pattern with shared runtime logic:
 | Vector Store | Aurora PostgreSQL + pgvector | Knowledge Base embeddings |
 | Agent Runtime | Strands Agent SDK | Bedrock model invocation + tool calling |
 | Retrieval | Bedrock Knowledge Bases | Document search via `search_manuals` tool |
-| UI | Gradio | Chat interface with auth + KB management |
+| UI | React/Vite | Chat interface with auth and citations |
 
 ---
 
@@ -182,7 +182,7 @@ pip install ruff pytest   # Development tools
 # Start the platform (API + UI)
 python main.py
 # → API at http://localhost:8000/v1
-# → UI at http://localhost:8000/ui
+# -> UI at http://localhost:8000/login
 # → Docs at http://localhost:8000/docs
 
 # CLI testing (no server required)
